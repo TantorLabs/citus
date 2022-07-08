@@ -68,25 +68,17 @@ DROP FUNCTION pg_catalog.get_all_active_transactions(OUT datid oid, OUT process_
 #include "udfs/citus_split_shard_by_split_points/11.1-1.sql"
 #include "udfs/worker_split_copy/11.1-1.sql"
 
-CREATE TYPE citus.citus_move_shard_placement_arguments AS (
-	shard_id bigint,
-	source_node_name text,
-	source_node_port integer,
-	target_node_name text,
-	target_node_port integer,
-	shard_transfer_mode citus.shard_transfer_mode
-);
-ALTER TYPE citus.citus_move_shard_placement_arguments SET SCHEMA pg_catalog;
-
-CREATE TYPE citus.citus_job_status AS ENUM ('scheduled', 'done');
+CREATE TYPE citus.citus_job_status AS ENUM ('scheduled', 'done', 'error');
 ALTER TYPE citus.citus_job_status SET SCHEMA pg_catalog;
 
 CREATE TABLE citus.pg_dist_rebalance_jobs(
     jobid bigserial NOT NULL,
-    status pg_catalog.citus_job_status default 'scheduled',
-    citus_move_shard_placement pg_catalog.citus_move_shard_placement_arguments
+    status pg_catalog.citus_job_status default 'scheduled' NOT NULL,
+    command text NOT NULL,
+    retry_count integer,
+    message text
 );
---  SELECT granted to PUBLIC in upgrade script
+
 ALTER TABLE citus.pg_dist_rebalance_jobs SET SCHEMA pg_catalog;
 CREATE UNIQUE INDEX pg_dist_rebalance_jobs_jobid_index ON pg_catalog.pg_dist_rebalance_jobs using btree(jobid);
 CREATE INDEX pg_dist_rebalance_jobs_status_jobid_index ON pg_catalog.pg_dist_rebalance_jobs using btree(status, jobid);
