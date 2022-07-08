@@ -40,6 +40,7 @@
 #include "distributed/shard_cleaner.h"
 #include "distributed/metadata_sync.h"
 #include "distributed/query_stats.h"
+#include "distributed/repair_shards.h"
 #include "distributed/statistics_collection.h"
 #include "distributed/transaction_recovery.h"
 #include "distributed/version_compat.h"
@@ -56,6 +57,7 @@
 #if PG_VERSION_NUM >= PG_VERSION_13
 #include "common/hashfn.h"
 #endif
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/lsyscache.h"
 
@@ -124,6 +126,7 @@ static bool MetadataSyncTriggeredCheckAndReset(MaintenanceDaemonDBData *dbData);
 static void WarnMaintenanceDaemonNotStarted(void);
 static BackgroundWorkerHandle * StartRebalanceJobsBackgroundWorker(Oid database,
 																   Oid extensionOwner);
+static bool ExecuteRebalanceJob(RebalanceJob *job);
 
 /*
  * InitializeMaintenanceDaemon, called at server start, is responsible for
@@ -852,6 +855,8 @@ RebalanceJobsBackgroundWorkerMain(Datum arg)
 	/* make worker recognizable in pg_stat_activity */
 	pgstat_report_appname("rebalance jobs worker");
 
+	ereport(LOG, (errmsg("background jobs runner")));
+
 	bool hasJobs = true;
 	while (hasJobs)
 	{
@@ -874,9 +879,10 @@ RebalanceJobsBackgroundWorkerMain(Datum arg)
 			{
 				ereport(LOG, (errmsg("found job with jobid: %ld", job->jobid)));
 
-				/* TODO execute job */
-
-				UpdateJobStatus(job, REBALANCE_JOB_STATUS_DONE);
+				if (ExecuteRebalanceJob(job))
+				{
+					UpdateJobStatus(job, REBALANCE_JOB_STATUS_DONE);
+				}
 			}
 			else
 			{
@@ -887,6 +893,40 @@ RebalanceJobsBackgroundWorkerMain(Datum arg)
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		ProcessCompletedNotifies();
+	}
+}
+
+
+static bool
+ExecuteMoveRebalanceJob(RebalanceJob *job)
+{
+	DirectFunctionCall6Coll(citus_move_shard_placement, InvalidOid,
+							Int64GetDatum(job->jobArguments.move.shardId),
+							CStringGetTextDatum(job->jobArguments.move.sourceName),
+							Int32GetDatum(job->jobArguments.move.sourcePort),
+							CStringGetTextDatum(job->jobArguments.move.targetName),
+							Int32GetDatum(job->jobArguments.move.targetPort),
+							ObjectIdGetDatum(16598)); /* fix hardcoded value of 'block_writes' */
+
+	return true;
+}
+
+
+static bool
+ExecuteRebalanceJob(RebalanceJob *job)
+{
+	switch (job->jobType)
+	{
+		case REBALANCE_JOB_TYPE_MOVE:
+		{
+			return ExecuteMoveRebalanceJob(job);
+		}
+
+		default:
+		{
+			ereport(ERROR, (errmsg("undefined rebalance job for jobid: %ld",
+								   job->jobid)));
+		}
 	}
 }
 
