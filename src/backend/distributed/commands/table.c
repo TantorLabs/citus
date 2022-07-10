@@ -440,15 +440,16 @@ PreprocessAlterTableStmtAttachPartition(AlterTableStmt *alterTableStatement,
 			Oid parentRelationId = AlterTableLookupRelation(alterTableStatement,
 															lockmode);
 			PartitionCmd *partitionCommand = (PartitionCmd *) alterTableCommand->def;
+
+			/*
+			 * Citus should not throw error for non-existing objects, let Postgres do that.
+			 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
+			 */
 			bool partitionMissingOk = true;
 			Oid partitionRelationId = RangeVarGetRelid(partitionCommand->name, lockmode,
 													   partitionMissingOk);
 			if (!OidIsValid(partitionRelationId))
 			{
-				/*
-				 * Citus should not throw error for non-existing objects, let Postgres do that.
-				 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-				 */
 				return NIL;
 			}
 

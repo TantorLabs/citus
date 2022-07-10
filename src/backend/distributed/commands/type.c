@@ -352,10 +352,6 @@ AlterTypeStmtObjectAddress(Node *node, bool missing_ok)
 	Oid typeOid = LookupTypeNameOid(NULL, typeName, missing_ok);
 	if (!OidIsValid(typeOid))
 	{
-		/*
-		 * Citus should not throw error for non-existing objects, let Postgres do that.
-		 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-		 */
 		return InvalidObjectAddress;
 	}
 
@@ -375,13 +371,9 @@ AlterEnumStmtObjectAddress(Node *node, bool missing_ok)
 {
 	AlterEnumStmt *stmt = castNode(AlterEnumStmt, node);
 	TypeName *typeName = makeTypeNameFromNameList(stmt->typeName);
-	Oid typeOid = LookupTypeNameOid(NULL, typeName, true);
+	Oid typeOid = LookupTypeNameOid(NULL, typeName, missing_ok);
 	if (!OidIsValid(typeOid))
 	{
-		/*
-		 * Citus should not throw error for non-existing objects, let Postgres do that.
-		 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-		 */
 		return InvalidObjectAddress;
 	}
 
@@ -403,13 +395,9 @@ RenameTypeStmtObjectAddress(Node *node, bool missing_ok)
 	Assert(stmt->renameType == OBJECT_TYPE);
 
 	TypeName *typeName = makeTypeNameFromNameList((List *) stmt->object);
-	Oid typeOid = LookupTypeNameOid(NULL, typeName, true);
+	Oid typeOid = LookupTypeNameOid(NULL, typeName, missing_ok);
 	if (!OidIsValid(typeOid))
 	{
-		/*
-		 * Citus should not throw error for non-existing objects, let Postgres do that.
-		 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-		 */
 		return InvalidObjectAddress;
 	}
 
@@ -460,14 +448,9 @@ AlterTypeSchemaStmtObjectAddress(Node *node, bool missing_ok)
 		 */
 		List *newNames = list_make2(makeString(stmt->newschema), typeNameStr);
 		TypeName *newTypeName = makeTypeNameFromNameList(newNames);
-		typeOid = LookupTypeNameOid(NULL, newTypeName, true);
-
+		typeOid = LookupTypeNameOid(NULL, newTypeName, missing_ok);
 		if (!OidIsValid(typeOid))
 		{
-			/*
-			 * Citus should not throw error for non-existing objects, let Postgres do that.
-			 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-			 */
 			return InvalidObjectAddress;
 		}
 	}
@@ -495,13 +478,9 @@ RenameTypeAttributeStmtObjectAddress(Node *node, bool missing_ok)
 	Assert(stmt->relationType == OBJECT_TYPE);
 
 	TypeName *typeName = MakeTypeNameFromRangeVar(stmt->relation);
-	Oid typeOid = LookupTypeNameOid(NULL, typeName, true);
+	Oid typeOid = LookupTypeNameOid(NULL, typeName, missing_ok);
 	if (!OidIsValid(typeOid))
 	{
-		/*
-		 * Citus should not throw error for non-existing objects, let Postgres do that.
-		 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-		 */
 		return InvalidObjectAddress;
 	}
 
@@ -523,13 +502,9 @@ AlterTypeOwnerObjectAddress(Node *node, bool missing_ok)
 	Assert(stmt->objectType == OBJECT_TYPE);
 
 	TypeName *typeName = makeTypeNameFromNameList((List *) stmt->object);
-	Oid typeOid = LookupTypeNameOid(NULL, typeName, true);
+	Oid typeOid = LookupTypeNameOid(NULL, typeName, missing_ok);
 	if (!OidIsValid(typeOid))
 	{
-		/*
-		 * Citus should not throw error for non-existing objects, let Postgres do that.
-		 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-		 */
 		return InvalidObjectAddress;
 	}
 

@@ -500,6 +500,9 @@ if($vanillatest)
 
     # we disable distributing the local views with no distributed dependency to not break postgres vanilla test behaviour
     push(@pgOptions, "citus.distribute_local_views=false");
+
+    # we enable resolving function parameters given in the form of ...%type to not break postgres vanilla test behaviour
+    push(@pgOptions, "citus.resolve_pct_type=true");
 }
 
 if ($useMitmproxy)

@@ -65,6 +65,13 @@
 #include "utils/syscache.h"
 #include "utils/regproc.h"
 
+/*
+ * GUC forces citus to resolve ...%type into its actual type before looking up a function
+ * in sys cache. It is intended to be used only in postgres tests to prevent redundant
+ * NOTICE log caused by LookupFuncWithArgs method called by CreateFunctionStmtObjectAddress.
+ */
+bool ResolvePctType = false;
+
 #define DISABLE_LOCAL_CHECK_FUNCTION_BODIES "SET LOCAL check_function_bodies TO off;"
 #define RESET_CHECK_FUNCTION_BODIES "RESET check_function_bodies;"
 #define argumentStartsWith(arg, prefix) \
@@ -111,6 +118,7 @@ static List * FilterDistributedFunctions(GrantStmt *grantStmt);
 static void EnsureExtensionFunctionCanBeDistributed(const ObjectAddress functionAddress,
 													const ObjectAddress extensionAddress,
 													char *distributionArgumentName);
+static void TryToResolvePctType(TypeName *typeName);
 
 PG_FUNCTION_INFO_V1(create_distributed_function);
 
@@ -1366,11 +1374,6 @@ PreprocessCreateFunctionStmt(Node *node, const char *queryString,
 List *
 PostprocessCreateFunctionStmt(Node *node, const char *queryString)
 {
-	if (!EnablePropagationWarnings)
-	{
-		return NIL;
-	}
-
 	CreateFunctionStmt *stmt = castNode(CreateFunctionStmt, node);
 
 	if (!ShouldPropagateCreateFunction(stmt))
@@ -1390,7 +1393,11 @@ PostprocessCreateFunctionStmt(Node *node, const char *queryString)
 
 	if (errMsg != NULL)
 	{
-		RaiseDeferredError(errMsg, WARNING);
+		if (EnablePropagationWarnings)
+		{
+			RaiseDeferredError(errMsg, WARNING);
+		}
+
 		return NIL;
 	}
 
@@ -1402,6 +1409,89 @@ PostprocessCreateFunctionStmt(Node *node, const char *queryString)
 	commands = list_concat(commands, list_make1(ENABLE_DDL_PROPAGATION));
 
 	return NodeDDLTaskList(NON_COORDINATOR_NODES, commands);
+}
+
+
+/*
+ * TryToResolvePctType resolves typeName given in the form of ...%type into its
+ * actual type. We do that in the same way as parse_type.c (LookupTypeNameExtended method).
+ * NOTE: This method is only intended to be used while executing postgres vanilla tests.
+ */
+static void
+TryToResolvePctType(TypeName *typeName)
+{
+	if (typeName == NULL)
+	{
+		return;
+	}
+
+	if (!typeName->pct_type)
+	{
+		return;
+	}
+
+	/* Handle %TYPE reference to type of an existing field */
+	RangeVar *rel = makeRangeVar(NULL, NULL, typeName->location);
+	char *field = NULL;
+
+	/* deconstruct the name list */
+	bool deconstructError = false;
+	switch (list_length(typeName->names))
+	{
+		case 1:
+		{
+			deconstructError = true;
+			break;
+		}
+
+		case 2:
+		{
+			rel->relname = strVal(linitial(typeName->names));
+			field = strVal(lsecond(typeName->names));
+			break;
+		}
+
+		case 3:
+		{
+			rel->schemaname = strVal(linitial(typeName->names));
+			rel->relname = strVal(lsecond(typeName->names));
+			field = strVal(lthird(typeName->names));
+			break;
+		}
+
+		case 4:
+		{
+			rel->catalogname = strVal(linitial(typeName->names));
+			rel->schemaname = strVal(lsecond(typeName->names));
+			rel->relname = strVal(lthird(typeName->names));
+			field = strVal(lfourth(typeName->names));
+			break;
+		}
+
+		default:
+		{
+			deconstructError = true;
+			break;
+		}
+	}
+
+	if (deconstructError)
+	{
+		return;
+	}
+
+	Oid relid = RangeVarGetRelid(rel, NoLock, true);
+	AttrNumber attnum = get_attnum(relid, field);
+	if (attnum != InvalidAttrNumber)
+	{
+		Oid typeOid = get_atttype(relid, attnum);
+		if (OidIsValid(typeOid))
+		{
+			/* We successfully resolved ...%type into its real type */
+			typeName->names = NIL;
+			typeName->typeOid = typeOid;
+		}
+	}
 }
 
 
@@ -1429,6 +1519,16 @@ CreateFunctionStmtObjectAddress(Node *node, bool missing_ok)
 	{
 		if (ShouldAddFunctionSignature(funcParam->mode))
 		{
+			if (ResolvePctType)
+			{
+				/*
+				 * If ResolvePctType GUC is set true, we try to resolve the types
+				 * given as ...%type in function params to prevent redundant notice
+				 * log in LookupTypeNameExtended called by citus.
+				 */
+				TryToResolvePctType(funcParam->argType);
+			}
+
 			objectWithArgs->objargs = lappend(objectWithArgs->objargs,
 											  funcParam->argType);
 		}

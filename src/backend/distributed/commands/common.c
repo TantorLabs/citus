@@ -297,10 +297,6 @@ DropTextSearchDictObjectAddress(Node *node, bool missing_ok)
 
 		if (!schemaName)
 		{
-			/*
-			 * Citus should not throw error for non-existing objects, let Postgres do that.
-			 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-			 */
 			Oid tsdictOid = get_ts_dict_oid(objName, missing_ok);
 			if (OidIsValid(tsdictOid))
 			{

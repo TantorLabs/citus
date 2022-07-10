@@ -37,6 +37,7 @@
 #include "common/hashfn.h"
 #include "distributed/citus_meta_visibility.h"
 #include "distributed/commands.h"
+#include "distributed/metadata/dependency.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/metadata_sync.h"
 #include "distributed/listutils.h"
@@ -53,9 +54,6 @@
 
 /* GUC hides any objects, which depends on citus extension, from pg meta class queries, it is intended to be used in vanilla tests to not break postgres test logs */
 bool HideCitusDependentObjects = false;
-
-/* memory context for allocating DependentObjects */
-static MemoryContext DependentObjectsContext = NULL;
 
 static bool IsCitusDependedType(ObjectAddress typeObjectAddress);
 static Node * CreateCitusDependentObjectExpr(int pgMetaTableVarno, int pgMetaTableOid);
@@ -87,14 +85,6 @@ is_citus_depended_object(PG_FUNCTION_ARGS)
 	}
 
 	bool dependsOnCitus = false;
-
-	DependentObjectsContext =
-		AllocSetContextCreate(
-			CurrentMemoryContext,
-			"Dependent Objects Context",
-			ALLOCSET_DEFAULT_SIZES);
-
-	MemoryContext oldContext = MemoryContextSwitchTo(DependentObjectsContext);
 
 	ObjectAddress objectAdress = { metaTableId, objectId, 0 };
 
@@ -168,8 +158,6 @@ is_citus_depended_object(PG_FUNCTION_ARGS)
 		}
 	}
 
-	MemoryContextSwitchTo(oldContext);
-
 	PG_RETURN_BOOL(dependsOnCitus);
 }
 
@@ -188,75 +176,8 @@ is_citus_depended_object(PG_FUNCTION_ARGS)
 bool
 IsCitusDependentObject(ObjectAddress objectAddress, HTAB *dependentObjects)
 {
-	Oid citusId = get_extension_oid("citus", false);
-
-	if (dependentObjects == NULL)
-	{
-		HASHCTL info;
-		uint32 hashFlags = (HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
-		memset(&info, 0, sizeof(info));
-		info.keysize = sizeof(Oid);
-		info.hash = oid_hash;
-		info.entrysize = sizeof(ObjectAddress);
-		info.hcxt = DependentObjectsContext;
-
-		dependentObjects = hash_create("dependent objects map", 256, &info, hashFlags);
-	}
-
-	bool found = false;
-	hash_search(dependentObjects, &objectAddress.objectId, HASH_ENTER, &found);
-	if (found)
-	{
-		/* previously visited object, so no need to revisit it */
-		return false;
-	}
-
-	bool citusDependent = false;
-
-	ScanKeyData key[2];
-	HeapTuple depTup = NULL;
-
-	/* iterate the actual pg_depend catalog */
-	Relation depRel = table_open(DependRelationId, AccessShareLock);
-
-	/* scan pg_depend for classid = $1 AND objid = $2 using pg_depend_depender_index */
-	ScanKeyInit(&key[0], Anum_pg_depend_classid, BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(objectAddress.classId));
-	ScanKeyInit(&key[1], Anum_pg_depend_objid, BTEqualStrategyNumber, F_OIDEQ,
-				ObjectIdGetDatum(objectAddress.objectId));
-	SysScanDesc depScan = systable_beginscan(depRel, DependDependerIndexId, true, NULL, 2,
-											 key);
-
-	while (HeapTupleIsValid(depTup = systable_getnext(depScan)))
-	{
-		Form_pg_depend pg_depend = (Form_pg_depend) GETSTRUCT(depTup);
-		Oid refClassId = pg_depend->refclassid;
-		Oid refObjectId = pg_depend->refobjid;
-
-		if (OidIsValid(refClassId) && OidIsValid(refObjectId))
-		{
-			/* found dependency with citus */
-			if (citusId == refObjectId)
-			{
-				citusDependent = true;
-				break;
-			}
-
-			ObjectAddress refObjectAddress = { refClassId, refObjectId, 0 };
-			citusDependent = IsCitusDependentObject(refObjectAddress, dependentObjects);
-
-			/* found dependency to citus */
-			if (citusDependent)
-			{
-				break;
-			}
-		}
-	}
-
-	systable_endscan(depScan);
-	relation_close(depRel, AccessShareLock);
-
-	return citusDependent;
+	List *dependencies = GetAllCitusDependenciesForObject(&objectAddress);
+	return list_length(dependencies) > 0;
 }
 
 
@@ -506,7 +427,7 @@ GetFuncArgs(int pgMetaTableVarno, int pgMetaTableOid)
 
 
 /*
- * ShouldCheckObjectValidity decides if we should validate a distributed object.
+ * CheckObjectValidity decides if we should validate a distributed object.
  * Currently, we added all objects which cause postgres vanilla tests to fail
  * bacause the citus logs in their preprocess, qualify or postprocess steps breaks postgres vanilla
  * tests. In utility_hook, we set validity of the object to false in case an invalid object address
@@ -514,8 +435,8 @@ GetFuncArgs(int pgMetaTableVarno, int pgMetaTableOid)
  * qualify and postprocess steps for the object if it is not valid. We check objects'
  * validity only if this method returns true.
  */
-bool
-ShouldCheckObjectValidity(Node *node)
+void
+CheckObjectValidity(Node *node, const DistributeObjectOps *ops, bool *opsAddressValid)
 {
 	/*
 	 * If we set EnablePropagationWarnings true,
@@ -523,24 +444,29 @@ ShouldCheckObjectValidity(Node *node)
 	 */
 	if (EnablePropagationWarnings)
 	{
-		return false;
+		*opsAddressValid = true;
+		return;
 	}
 
+	bool shouldValidateStmt = false;
 	switch (nodeTag(node))
 	{
 		case T_AlterDomainStmt:
 		{
-			return true;
+			shouldValidateStmt = true;
+			break;
 		}
 
 		case T_ReindexStmt:
 		{
-			return true;
+			shouldValidateStmt = true;
+			break;
 		}
 
 		case T_AlterEnumStmt:
 		{
-			return true;
+			shouldValidateStmt = true;
+			break;
 		}
 
 		case T_DropStmt:
@@ -555,14 +481,17 @@ ShouldCheckObjectValidity(Node *node)
 				case OBJECT_TSDICTIONARY:
 				case OBJECT_TSCONFIGURATION:
 				{
-					return true;
+					shouldValidateStmt = true;
+					break;
 				}
 
 				default:
 				{
-					return false;
+					shouldValidateStmt = false;
+					break;
 				}
 			}
+			break;
 		}
 
 		case T_RenameStmt:
@@ -573,24 +502,30 @@ ShouldCheckObjectValidity(Node *node)
 			{
 				case OBJECT_TYPE:
 				{
-					return true;
+					shouldValidateStmt = true;
+					break;
 				}
 
 				case OBJECT_ATTRIBUTE:
 				{
 					if (renameStmt->relationType == OBJECT_TYPE)
 					{
-						return true;
+						shouldValidateStmt = true;
 					}
-
-					return false;
+					else
+					{
+						shouldValidateStmt = false;
+					}
+					break;
 				}
 
 				default:
 				{
-					return false;
+					shouldValidateStmt = false;
+					break;
 				}
 			}
+			break;
 		}
 
 		case T_AlterTableStmt:
@@ -598,10 +533,13 @@ ShouldCheckObjectValidity(Node *node)
 			AlterTableStmt *alterTableStmt = castNode(AlterTableStmt, node);
 			if (AlterTableStmtObjType_compat(alterTableStmt) == OBJECT_TYPE)
 			{
-				return true;
+				shouldValidateStmt = true;
 			}
-
-			return false;
+			else
+			{
+				shouldValidateStmt = false;
+			}
+			break;
 		}
 
 		case T_AlterOwnerStmt:
@@ -609,10 +547,13 @@ ShouldCheckObjectValidity(Node *node)
 			AlterOwnerStmt *alterOwnerStmt = castNode(AlterOwnerStmt, node);
 			if (alterOwnerStmt->objectType == OBJECT_TYPE)
 			{
-				return true;
+				shouldValidateStmt = true;
 			}
-
-			return false;
+			else
+			{
+				shouldValidateStmt = false;
+			}
+			break;
 		}
 
 		case T_AlterObjectSchemaStmt:
@@ -621,17 +562,29 @@ ShouldCheckObjectValidity(Node *node)
 																	node);
 			if (alterObjectSchemaStmt->objectType == OBJECT_TYPE)
 			{
-				return true;
+				shouldValidateStmt = true;
 			}
-
-			return false;
+			else
+			{
+				shouldValidateStmt = false;
+			}
+			break;
 		}
 
 		default:
 		{
-			return false;
+			shouldValidateStmt = false;
+			break;
 		}
 	}
 
-	return false;
+	if (ops && ops->address && shouldValidateStmt)
+	{
+		ObjectAddress objectAddress = ops->address(node, true);
+		*opsAddressValid = OidIsValid(objectAddress.objectId);
+	}
+	else
+	{
+		*opsAddressValid = true;
+	}
 }

@@ -271,7 +271,7 @@ IsDropValidConstraint(Oid domainOid, char *constraintName)
 /*
  * IsDropConstraintStmt returns true if alter domain statement is about dropping constraint.
  */
-bool
+static bool
 IsDropConstraintStmt(AlterDomainStmt *alterDomainStmt)
 {
 	return alterDomainStmt->subtype == 'X';

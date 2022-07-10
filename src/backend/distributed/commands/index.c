@@ -651,10 +651,6 @@ ReindexStmtObjectAddress(Node *stmt, bool missing_ok)
 
 			if (!OidIsValid(indOid))
 			{
-				/*
-				 * Citus should not throw error for non-existing objects, let Postgres do that.
-				 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-				 */
 				return InvalidObjectAddress;
 			}
 
@@ -663,15 +659,11 @@ ReindexStmtObjectAddress(Node *stmt, bool missing_ok)
 		else
 		{
 			Oid indOid = RangeVarGetRelidExtended(reindexStatement->relation, lockmode,
-												  RVR_MISSING_OK,
+												  (missing_ok) ? RVR_MISSING_OK : 0,
 												  RangeVarCallbackOwnsTable, NULL);
 
 			if (!OidIsValid(indOid))
 			{
-				/*
-				 * Citus should not throw error for non-existing objects, let Postgres do that.
-				 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-				 */
 				return InvalidObjectAddress;
 			}
 

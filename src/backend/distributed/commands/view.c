@@ -43,6 +43,7 @@ static void AppendQualifiedViewNameToCreateViewCommand(StringInfo buf, Oid viewO
 static void AppendViewDefinitionToCreateViewCommand(StringInfo buf, Oid viewOid);
 static void AppendAliasesToCreateViewCommand(StringInfo createViewCommand, Oid viewOid);
 static void AppendOptionsToCreateViewCommand(StringInfo createViewCommand, Oid viewOid);
+static bool ViewHasDistributedDependency(ObjectAddress *viewObjectAddress);
 
 /*
  * PreprocessViewStmt is called during the planning phase for CREATE OR REPLACE VIEW
@@ -66,6 +67,31 @@ PreprocessViewStmt(Node *node, const char *queryString,
 	EnsureCoordinator();
 
 	return NIL;
+}
+
+
+/*
+ * ViewHasDistributedDependency returns true if given view at address has
+ * any distributed dependency.
+ */
+static bool
+ViewHasDistributedDependency(ObjectAddress *viewObjectAddress)
+{
+	bool hasDistDependency = false;
+	List *dependencies = GetAllDependenciesForObject(viewObjectAddress);
+	ObjectAddress *dependency = NULL;
+
+	foreach_ptr(dependency, dependencies)
+	{
+		if (IsObjectDistributed(dependency))
+		{
+			hasDistDependency = true;
+
+			break;
+		}
+	}
+
+	return hasDistDependency;
 }
 
 
@@ -116,21 +142,7 @@ PostprocessViewStmt(Node *node, const char *queryString)
 	 */
 	if (!DistributeLocalViews)
 	{
-		bool hasDistDependency = false;
-		List *dependencies = GetAllDependenciesForObject(&viewAddress);
-		ObjectAddress *dependency = NULL;
-
-		foreach_ptr(dependency, dependencies)
-		{
-			if (IsObjectDistributed(dependency))
-			{
-				hasDistDependency = true;
-
-				break;
-			}
-		}
-
-		if (!hasDistDependency)
+		if (!ViewHasDistributedDependency(&viewAddress))
 		{
 			return NIL;
 		}
@@ -269,10 +281,6 @@ DropViewStmtObjectAddress(Node *stmt, bool missing_ok)
 										   missing_ok);
 			if (!OidIsValid(viewOid))
 			{
-				/*
-				 * Citus should not throw error for non-existing objects, let Postgres do that.
-				 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-				 */
 				return InvalidObjectAddress;
 			}
 

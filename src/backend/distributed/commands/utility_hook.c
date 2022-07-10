@@ -527,8 +527,9 @@ ProcessUtilityInternal(PlannedStmt *pstmt,
 	/* only generate worker DDLJobs if propagation is enabled */
 	const DistributeObjectOps *ops = NULL;
 
-	/* determines if we should run preprocess and postprocess steps for the object */
-	bool isObjectValid = true;
+	/* determines if we should run preprocess and postprocess steps for the ops */
+	bool opsAddrValid = false;
+
 	if (EnableDDLPropagation)
 	{
 		/* copy planned statement since we might scribble on it or its utilityStmt */
@@ -536,15 +537,10 @@ ProcessUtilityInternal(PlannedStmt *pstmt,
 		parsetree = pstmt->utilityStmt;
 		ops = GetDistributeObjectOps(parsetree);
 
-		if (ShouldCheckObjectValidity(parsetree))
-		{
-			/*
-			 * We disable qualify, preprocess and postprocess if object is not valid after
-			 * validating the object in address function.
-			 */
-			ObjectAddress objectAddress = ops->address(parsetree, true);
-			isObjectValid = OidIsValid(objectAddress.objectId);
-		}
+		/*
+		 * We disable qualify, preprocess and postprocess if opsAddrValid is false.
+		 */
+		CheckObjectValidity(parsetree, ops, &opsAddrValid);
 
 		/*
 		 * For some statements Citus defines a Qualify function. The goal of this function
@@ -555,14 +551,14 @@ ProcessUtilityInternal(PlannedStmt *pstmt,
 		 * deserialize calls for the statement portable to other postgres servers, the
 		 * workers in our case.
 		 */
-		if (ops && ops->qualify && isObjectValid)
+		if (ops && ops->qualify && opsAddrValid)
 		{
 			ops->qualify(parsetree);
 		}
 
 		DistObjectCurrentState = DISTOBJECTSTATE_PREPROCESS;
 
-		if (ops && ops->preprocess && isObjectValid)
+		if (ops && ops->preprocess && opsAddrValid)
 		{
 			ddlJobs = ops->preprocess(parsetree, queryString, context);
 		}
@@ -713,7 +709,7 @@ ProcessUtilityInternal(PlannedStmt *pstmt,
 	{
 		DistObjectCurrentState = DISTOBJECTSTATE_POSTPROCESS;
 
-		if (ops && ops->postprocess && isObjectValid)
+		if (ops && ops->postprocess && opsAddrValid)
 		{
 			List *processJobs = ops->postprocess(parsetree, queryString);
 
@@ -848,7 +844,7 @@ ProcessUtilityInternal(PlannedStmt *pstmt,
 		 * Since we must have objects on workers before distributing them,
 		 * mark object distributed as the last step.
 		 */
-		if (ops && ops->markDistributed && isObjectValid)
+		if (ops && ops->markDistributed && opsAddrValid)
 		{
 			ObjectAddress address = GetObjectAddressFromParseTree(parsetree, false);
 			MarkObjectDistributed(&address);

@@ -34,6 +34,7 @@
 #include "catalog/pg_rewrite_d.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_type.h"
+#include "commands/extension.h"
 #if PG_VERSION_NUM >= PG_VERSION_13
 #include "common/hashfn.h"
 #endif
@@ -173,6 +174,8 @@ static void ApplyAddToDependencyList(ObjectAddressCollector *collector,
 static List * GetViewRuleReferenceDependencyList(Oid relationId);
 static List * ExpandCitusSupportedTypes(ObjectAddressCollector *collector,
 										ObjectAddress target);
+static List * ExpandPgVanillaTestTypes(ObjectAddressCollector *collector,
+										ObjectAddress target);
 static List * GetDependentRoleIdsFDW(Oid FDWOid);
 static List * ExpandRolesToGroups(Oid roleid);
 static ViewDependencyNode * BuildViewDependencyGraph(Oid relationId, HTAB *nodeMap);
@@ -271,6 +274,26 @@ GetAllDependenciesForObject(const ObjectAddress *target)
 							  &ExpandCitusSupportedTypes,
 							  &FollowAllDependencies,
 							  &ApplyAddToDependencyList,
+							  &collector);
+
+	return collector.dependencyList;
+}
+
+
+/*
+ * GetAllCitusDependenciesForObject is similar to GetAllDependenciesForObject but it only
+ * returns the dependencies which are owned by citus extension.
+ */
+List *
+GetAllCitusDependenciesForObject(const ObjectAddress *target)
+{
+	ObjectAddressCollector collector = { 0 };
+	InitObjectAddressCollector(&collector);
+
+	RecurseObjectDependencies(*target,
+							  &ExpandPgVanillaTestTypes,
+							  NULL,
+							  NULL,
 							  &collector);
 
 	return collector.dependencyList;
@@ -1444,6 +1467,77 @@ ExpandCitusSupportedTypes(ObjectAddressCollector *collector, ObjectAddress targe
 		}
 	}
 	return result;
+}
+
+
+/*
+ * ExpandPgVanillaTestTypes expands the list of objects to visit in pg_depend.
+ * It does that to cover all require meta types used in pg vanilla tests.
+ */
+static List *
+ExpandPgVanillaTestTypes(ObjectAddressCollector *collector, ObjectAddress target)
+{
+	Oid citusId = get_extension_oid("citus", false);
+
+	bool found = false;
+	hash_search(collector->dependencySet, &target.objectId, HASH_ENTER, &found);
+	if (found)
+	{
+		/* previously visited object, so no need to revisit it */
+		return NIL;
+	}
+
+	List *depList = NIL;
+	bool citusDepended = false;
+
+	ScanKeyData key[2];
+	HeapTuple depTup = NULL;
+
+	/* iterate the actual pg_depend catalog */
+	Relation depRel = table_open(DependRelationId, AccessShareLock);
+
+	/* scan pg_depend for classid = $1 AND objid = $2 using pg_depend_depender_index */
+	ScanKeyInit(&key[0], Anum_pg_depend_classid, BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(target.classId));
+	ScanKeyInit(&key[1], Anum_pg_depend_objid, BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(target.objectId));
+	SysScanDesc depScan = systable_beginscan(depRel, DependDependerIndexId, true, NULL, 2,
+											 key);
+
+	while (HeapTupleIsValid(depTup = systable_getnext(depScan)))
+	{
+		Form_pg_depend pg_depend = (Form_pg_depend) GETSTRUCT(depTup);
+		Oid refClassId = pg_depend->refclassid;
+		Oid refObjectId = pg_depend->refobjid;
+
+		if (OidIsValid(refClassId) && OidIsValid(refObjectId))
+		{
+			/* found dependency with citus */
+			if (citusId == refObjectId)
+			{
+				citusDepended = true;
+				break;
+			}
+
+			ObjectAddress refObjectAddress = { refClassId, refObjectId, 0 };
+			depList = list_concat(depList,
+				ExpandPgVanillaTestTypes(collector, refObjectAddress));
+		}
+	}
+
+	systable_endscan(depScan);
+	relation_close(depRel, AccessShareLock);
+
+	if (citusDepended)
+	{
+		DependencyDefinition *dependencyDefinition = 
+			CreateObjectAddressDependencyDef(target.classId,
+												target.objectId);
+		depList = lappend(depList, dependencyDefinition);
+	}
+
+	collector->dependencyList = depList;
+	return depList;
 }
 
 

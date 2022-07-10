@@ -12,6 +12,7 @@
 #define CITUS_META_VISIBILITY_H
 
 #include "catalog/objectaddress.h"
+#include "distributed/commands.h"
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
 #include "postgres_ext.h"
@@ -22,7 +23,8 @@ extern bool HideCitusDependentObjects;
 extern bool HideCitusDependentObjectsFromPgMetaTable(Node *node, void *context);
 extern bool IsPgLocksTable(RangeTblEntry *rte);
 extern bool IsCitusDependentObject(ObjectAddress objectAddress, HTAB *dependentObjects);
-extern bool ShouldCheckObjectValidity(Node *node);
+extern void CheckObjectValidity(Node *node, const DistributeObjectOps *ops,
+								bool *opsAddressValid);
 
 
 #endif /* CITUS_META_VISIBILITY_H */

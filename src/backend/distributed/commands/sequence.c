@@ -322,7 +322,7 @@ PreprocessDropSequenceStmt(Node *node, const char *queryString,
 /*
  * SequenceDropStmtObjectAddress returns object address for drop sequence stmt.
  */
-extern ObjectAddress
+ObjectAddress
 SequenceDropStmtObjectAddress(Node *stmt, bool missing_ok)
 {
 	DropStmt *dropSeqStmt = castNode(DropStmt, stmt);
@@ -338,10 +338,6 @@ SequenceDropStmtObjectAddress(Node *stmt, bool missing_ok)
 		Oid seqOid = RangeVarGetRelid(seq, NoLock, missing_ok);
 		if (!OidIsValid(seqOid))
 		{
-			/*
-			 * Citus should not throw error for non-existing objects, let Postgres do that.
-			 * Otherwise, Citus might throw a different error than Postgres, which we don't want.
-			 */
 			return InvalidObjectAddress;
 		}
 

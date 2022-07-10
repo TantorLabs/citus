@@ -31,7 +31,6 @@
 #include "distributed/intermediate_result_pruning.h"
 #include "distributed/intermediate_results.h"
 #include "distributed/listutils.h"
-#include "distributed/log_utils.h"
 #include "distributed/coordinator_protocol.h"
 #include "distributed/metadata_cache.h"
 #include "distributed/multi_executor.h"

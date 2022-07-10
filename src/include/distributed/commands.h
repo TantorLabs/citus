@@ -33,6 +33,8 @@ extern int MaxMatViewSizeToAutoRecreate;
 
 extern bool DistributeLocalViews;
 
+extern bool ResolvePctType;
+
 extern void SwitchToSequentialAndLocalExecutionIfRelationNameTooLong(Oid relationId,
 																	 char *
 																	 finalRelationName);

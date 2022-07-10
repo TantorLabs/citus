@@ -1761,6 +1761,18 @@ RegisterCitusConfigVariables(void)
 		WarnIfReplicationModelIsSet, NULL, NULL);
 
 	DefineCustomBoolVariable(
+		"citus.resolve_pct_type",
+		gettext_noop(
+			"Resolves types in function args which are in the form of ...%type "
+			"into their actual types."),
+		NULL,
+		&ResolvePctType,
+		false,
+		PGC_USERSET,
+		GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL,
+		NULL, NULL, NULL);
+
+	DefineCustomBoolVariable(
 		"citus.running_under_isolation_test",
 		gettext_noop(
 			"Only useful for testing purposes, when set to true, Citus does some "
