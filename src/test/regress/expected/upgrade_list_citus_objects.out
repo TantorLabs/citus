@@ -144,6 +144,7 @@ ORDER BY 1;
  function get_rebalance_progress()
  function get_rebalance_table_shards_plan(regclass,real,integer,bigint[],boolean,name,real)
  function get_shard_id_for_distribution_column(regclass,"any")
+ function is_citus_depended_object(oid,oid)
  function isolate_tenant_to_new_shard(regclass,"any",text)
  function json_cat_agg(json)
  function jsonb_cat_agg(jsonb)
@@ -263,5 +264,5 @@ ORDER BY 1;
  view citus_stat_statements
  view pg_dist_shard_placement
  view time_partitions
-(255 rows)
+(256 rows)
 

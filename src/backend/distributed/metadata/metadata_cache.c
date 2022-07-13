@@ -182,6 +182,7 @@ typedef struct MetadataCacheData
 	Oid relationIsAKnownShardFuncId;
 	Oid jsonbExtractPathFuncId;
 	Oid jsonbExtractPathTextFuncId;
+	Oid CitusDependentObjectFuncId;
 	bool databaseNameValid;
 	char databaseName[NAMEDATALEN];
 } MetadataCacheData;
@@ -2893,6 +2894,24 @@ JsonbExtractPathTextFuncId(void)
 	}
 
 	return MetadataCache.jsonbExtractPathTextFuncId;
+}
+
+
+/*
+ * CitusDependentObjectFuncId returns oid of the is_citus_depended_object function.
+ */
+Oid
+CitusDependentObjectFuncId(void)
+{
+	if (MetadataCache.CitusDependentObjectFuncId == InvalidOid)
+	{
+		const int argCount = 2;
+
+		MetadataCache.CitusDependentObjectFuncId =
+			FunctionOid("pg_catalog", "is_citus_depended_object", argCount);
+	}
+
+	return MetadataCache.CitusDependentObjectFuncId;
 }
 
 

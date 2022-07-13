@@ -25,6 +25,7 @@
 #include "commands/explain.h"
 #include "commands/tablecmds.h"
 #include "optimizer/cost.h"
+#include "distributed/citus_depended_object.h"
 #include "distributed/citus_nodefuncs.h"
 #include "distributed/connection_management.h"
 #include "distributed/deparse_shard_query.h"
@@ -1185,8 +1186,26 @@ CitusExplainOneQuery(Query *query, int cursorOptions, IntoClause *into,
 
 	INSTR_TIME_SET_CURRENT(planstart);
 
-	/* plan the query */
-	PlannedStmt *plan = pg_plan_query_compat(query, NULL, cursorOptions, params);
+	/*
+	 * we should not hide any objects while explaining some query to not break
+	 * postgres vanilla tests
+	 */
+	bool oldHideCitusDependentObjects = HideCitusDependentObjects;
+	HideCitusDependentObjects = false;
+	PlannedStmt *plan = NULL;
+
+	PG_TRY();
+	{
+		/* plan the query */
+		plan = pg_plan_query_compat(query, NULL, cursorOptions, params);
+	}
+	PG_FINALLY();
+	{
+		/* In case of an exception in planning, we want to set HideCitusDependentObjects its old value */
+		HideCitusDependentObjects = oldHideCitusDependentObjects;
+	}
+	PG_END_TRY();
+
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
 
