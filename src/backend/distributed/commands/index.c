@@ -75,7 +75,8 @@ static void RangeVarCallbackForReindexIndex(const RangeVar *rel, Oid relOid, Oid
 static void ErrorIfUnsupportedIndexStmt(IndexStmt *createIndexStatement);
 static void ErrorIfUnsupportedDropIndexStmt(DropStmt *dropIndexStatement);
 static List * DropIndexTaskList(Oid relationId, Oid indexId, DropStmt *dropStmt);
-
+static Oid ReindexStmtFindIndexOid(ReindexStmt *reindexStmt, bool missingOk,
+								   Relation *relation);
 
 /*
  * This struct defines the state for the callback for drop statements.
@@ -523,6 +524,49 @@ GetCreateIndexRelationLockMode(IndexStmt *createIndexStatement)
 
 
 /*
+ * ReindexStmtFindIndexOid returns the oid of the relation on which the index exist in reindex stmt.
+ * It also sets the relation given in the statement.
+ */
+static Oid
+ReindexStmtFindIndexOid(ReindexStmt *reindexStmt, bool missingOk, Relation *relation)
+{
+	Assert(reindexStmt->relation != NULL);
+
+	Assert(reindexStmt->kind == REINDEX_OBJECT_INDEX ||
+		   reindexStmt->kind == REINDEX_OBJECT_TABLE);
+
+	Oid relationId = InvalidOid;
+
+	LOCKMODE lockmode = IsReindexWithParam_compat(reindexStmt, "concurrently") ?
+						ShareUpdateExclusiveLock : AccessExclusiveLock;
+	if (reindexStmt->kind == REINDEX_OBJECT_INDEX)
+	{
+		struct ReindexIndexCallbackState state;
+		state.concurrent = IsReindexWithParam_compat(reindexStmt,
+													 "concurrently");
+		state.locked_table_oid = InvalidOid;
+
+		Oid indOid = RangeVarGetRelidExtended(reindexStmt->relation, lockmode,
+											  (missingOk) ? RVR_MISSING_OK : 0,
+											  RangeVarCallbackForReindexIndex,
+											  &state);
+		*relation = index_open(indOid, NoLock);
+		relationId = IndexGetRelation(indOid, missingOk);
+	}
+	else
+	{
+		RangeVarGetRelidExtended(reindexStmt->relation, lockmode,
+								 (missingOk) ? RVR_MISSING_OK : 0,
+								 RangeVarCallbackOwnsTable, NULL);
+		*relation = table_openrv(reindexStmt->relation, NoLock);
+		relationId = RelationGetRelid(*relation);
+	}
+
+	return relationId;
+}
+
+
+/*
  * PreprocessReindexStmt determines whether a given REINDEX statement involves
  * a distributed table. If so (and if the statement does not use unsupported
  * options), it modifies the input statement to ensure proper execution against
@@ -545,36 +589,8 @@ PreprocessReindexStmt(Node *node, const char *reindexCommand,
 	if (reindexStatement->relation != NULL)
 	{
 		Relation relation = NULL;
-		Oid relationId = InvalidOid;
-		LOCKMODE lockmode = IsReindexWithParam_compat(reindexStatement, "concurrently") ?
-							ShareUpdateExclusiveLock : AccessExclusiveLock;
+		Oid relationId = ReindexStmtFindIndexOid(reindexStatement, false, &relation);
 		MemoryContext relationContext = NULL;
-
-		Assert(reindexStatement->kind == REINDEX_OBJECT_INDEX ||
-			   reindexStatement->kind == REINDEX_OBJECT_TABLE);
-
-		if (reindexStatement->kind == REINDEX_OBJECT_INDEX)
-		{
-			struct ReindexIndexCallbackState state;
-			state.concurrent = IsReindexWithParam_compat(reindexStatement,
-														 "concurrently");
-			state.locked_table_oid = InvalidOid;
-
-			Oid indOid = RangeVarGetRelidExtended(reindexStatement->relation,
-												  lockmode, 0,
-												  RangeVarCallbackForReindexIndex,
-												  &state);
-			relation = index_open(indOid, NoLock);
-			relationId = IndexGetRelation(indOid, false);
-		}
-		else
-		{
-			RangeVarGetRelidExtended(reindexStatement->relation, lockmode, 0,
-									 RangeVarCallbackOwnsTable, NULL);
-
-			relation = table_openrv(reindexStatement->relation, NoLock);
-			relationId = RelationGetRelid(relation);
-		}
 
 		bool isCitusRelation = IsCitusTable(relationId);
 
@@ -625,6 +641,24 @@ PreprocessReindexStmt(Node *node, const char *reindexCommand,
 	}
 
 	return ddlJobs;
+}
+
+
+/*
+ * ReindexStmtObjectAddress returns list of object addresses in the reindex
+ * statement.
+ */
+List *
+ReindexStmtObjectAddress(Node *stmt, bool missing_ok)
+{
+	ReindexStmt *reindexStatement = castNode(ReindexStmt, stmt);
+
+	Relation relation = NULL;
+	Oid relationId = ReindexStmtFindIndexOid(reindexStatement, missing_ok, &relation);
+	ObjectAddress *objectAddress = palloc0(sizeof(ObjectAddress));
+	ObjectAddressSet(*objectAddress, RelationRelationId, relationId);
+
+	return list_make1(objectAddress);
 }
 
 
