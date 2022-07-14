@@ -207,7 +207,8 @@ typedef enum RebalanceJobStatus
 {
 	REBALANCE_JOB_STATUS_UNKNOWN,
 	REBALANCE_JOB_STATUS_SCHEDULED,
-	REBALANCE_JOB_STATUS_DONE
+	REBALANCE_JOB_STATUS_DONE,
+	REBALANCE_JOB_STATUS_ERROR
 } RebalanceJobStatus;
 
 
@@ -328,6 +329,8 @@ extern void AlterSequenceType(Oid seqOid, Oid typeOid);
 extern void EnsureRelationHasCompatibleSequenceTypes(Oid relationId);
 extern bool HasScheduledRebalanceJobs(void);
 extern RebalanceJob * GetScheduledRebalanceJob(void);
+extern RebalanceJob * GetScheduledRebalanceJobyJobID(int64 jobId);
 extern void UpdateJobStatus(RebalanceJob *job, RebalanceJobStatus newStatus);
 extern void UpdateJobError(RebalanceJob *job, ErrorData *edata);
+extern bool IsRebalanceJobStatusTerminal(RebalanceJobStatus status);
 #endif   /* METADATA_UTILITY_H */
