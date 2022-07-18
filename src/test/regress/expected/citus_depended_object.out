@@ -1,3 +1,12 @@
+-- create the udf is_citus_depended_object that is needed for the tests
+CREATE OR REPLACE FUNCTION
+    pg_catalog.is_citus_depended_object(oid,oid)
+    RETURNS bool
+    LANGUAGE C
+    AS 'citus', $$is_citus_depended_object$$;
+-- execute tests in a separate namespace
+CREATE SCHEMA citus_dependend_object;
+SET search_path TO citus_dependend_object;
 -- PG_CLASS VISIBILITY
 -- check if we correctly determine whether a relation is citus dependent or not.
 CREATE TABLE no_hide_pg_class(relname text);
@@ -7,10 +16,10 @@ CREATE TABLE citus_depended_class(nrole noderole);
 -- create a relation that depends on columnar access method which is a citus object
 CREATE TABLE citus_depended_class2(id int);
 SELECT alter_table_set_access_method('citus_depended_class2', 'columnar');
-NOTICE:  creating a new table for public.citus_depended_class2
-NOTICE:  moving the data of public.citus_depended_class2
-NOTICE:  dropping the old public.citus_depended_class2
-NOTICE:  renaming the new table to public.citus_depended_class2
+NOTICE:  creating a new table for citus_dependend_object.citus_depended_class2
+NOTICE:  moving the data of citus_dependend_object.citus_depended_class2
+NOTICE:  dropping the old citus_dependend_object.citus_depended_class2
+NOTICE:  renaming the new table to citus_dependend_object.citus_depended_class2
  alter_table_set_access_method
 ---------------------------------------------------------------------
 
@@ -48,11 +57,6 @@ FROM (VALUES ('pg_dist_shard'), ('pg_dist_placement'), ('pg_type'), ('pg_proc'),
  citus_independed_class | f
 (7 rows)
 
-DROP TABLE citus_depended_class;
-DROP TABLE citus_depended_class2;
-DROP TABLE citus_independed_class;
-DROP TABLE no_hide_pg_class;
-DROP TABLE hide_pg_class;
 -- PG_TYPE VISIBILITY
 -- check if we correctly determine whether a type is citus dependent or not.
 CREATE TABLE no_hide_pg_type(typname text);
@@ -90,10 +94,6 @@ FROM (VALUES ('noderole'), ('_noderole'), ('int'), ('_int'),
  citus_independed_type | f
 (6 rows)
 
-DROP TYPE citus_depended_type;
-DROP TYPE citus_independed_type;
-DROP TABLE no_hide_pg_type;
-DROP TABLE hide_pg_type;
 -- PG_AM VISIBILITY
 -- check if we correctly determine whether an access method is citus dependent or not.
 CREATE TABLE no_hide_pg_am(amname text);
@@ -134,8 +134,6 @@ ORDER BY 1;
  spgist
 (7 rows)
 
-DROP TABLE no_hide_pg_am;
-DROP TABLE hide_pg_am;
 -- PG_PROC VISIBILITY
 -- check if we correctly determine whether a procedure is citus dependent or not.
 CREATE TABLE no_hide_pg_proc(proname text);
@@ -177,7 +175,21 @@ FROM (VALUES ('master_add_node'), ('format'),
  citus_independed_proc | f
 (4 rows)
 
-DROP PROCEDURE citus_depended_proc;
-DROP PROCEDURE citus_independed_proc;
-DROP TABLE no_hide_pg_proc;
-DROP TABLE hide_pg_proc;
+-- drop the namespace with all its objects
+DROP SCHEMA citus_dependend_object CASCADE;
+NOTICE:  drop cascades to 15 other objects
+DETAIL:  drop cascades to table no_hide_pg_class
+drop cascades to table hide_pg_class
+drop cascades to table citus_depended_class
+drop cascades to table citus_depended_class2
+drop cascades to table citus_independed_class
+drop cascades to table no_hide_pg_type
+drop cascades to table hide_pg_type
+drop cascades to type citus_depended_type
+drop cascades to type citus_independed_type
+drop cascades to table no_hide_pg_am
+drop cascades to table hide_pg_am
+drop cascades to table no_hide_pg_proc
+drop cascades to table hide_pg_proc
+drop cascades to function citus_depended_proc(noderole)
+drop cascades to function citus_independed_proc(integer)

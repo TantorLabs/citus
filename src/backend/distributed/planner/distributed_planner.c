@@ -17,6 +17,7 @@
 #include <limits.h>
 
 #include "access/htup_details.h"
+#include "access/xact.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
@@ -210,7 +211,7 @@ distributed_planner(Query *parse,
 	 * showing any citus dependent object. The flag is expected to be set only before
 	 * postgres vanilla tests.
 	 */
-	HideCitusDependentObjectsFromPgMetaTable((Node *) parse, NULL);
+	HideCitusDependentObjectsOnQueriesOfPgMetaTables((Node *) parse, NULL);
 
 	/* create a restriction context and put it at the end if context list */
 	planContext.plannerRestrictionContext = CreateAndPushPlannerRestrictionContext();
@@ -353,10 +354,11 @@ ListContainsDistributedTableRTE(List *rangeTableList,
 			continue;
 		}
 
-		if (HideCitusDependentObjects && IsPgLocksTable(rangeTableEntry))
+		if (HideCitusDependentObjects && IsolationIsSerializable() && IsPgLocksTable(
+				rangeTableEntry))
 		{
 			/*
-			 * Postgres tidscan test fails if we do not filter pg_locks table because
+			 * Postgres tidscan.sql test fails if we do not filter pg_locks table because
 			 * test results, which show taken locks in serializable isolation mode,
 			 * fails by showing extra lock taken by IsCitusTable below.
 			 */

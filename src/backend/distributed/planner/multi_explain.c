@@ -1187,25 +1187,18 @@ CitusExplainOneQuery(Query *query, int cursorOptions, IntoClause *into,
 	INSTR_TIME_SET_CURRENT(planstart);
 
 	/*
-	 * we should not hide any objects while explaining some query to not break
-	 * postgres vanilla tests
+	 * We should not hide any objects while explaining some query to not break
+	 * postgres vanilla tests.
+	 *
+	 * The filter 'is_citus_depended_object' is added to explain result
+	 * and causes some tests to fail if HideCitusDependentObjects is true.
+	 * Therefore, we disable HideCitusDependentObjects until the current transaction
+	 * ends.
 	 */
-	bool oldHideCitusDependentObjects = HideCitusDependentObjects;
-	HideCitusDependentObjects = false;
-	PlannedStmt *plan = NULL;
+	SetLocalHideCitusDependentObjectsDisabledWhenAlreadyEnabled();
 
-	PG_TRY();
-	{
-		/* plan the query */
-		plan = pg_plan_query_compat(query, NULL, cursorOptions, params);
-	}
-	PG_FINALLY();
-	{
-		/* In case of an exception in planning, we want to set HideCitusDependentObjects its old value */
-		HideCitusDependentObjects = oldHideCitusDependentObjects;
-	}
-	PG_END_TRY();
-
+	/* plan the query */
+	PlannedStmt *plan = pg_plan_query_compat(query, NULL, cursorOptions, params);
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
 

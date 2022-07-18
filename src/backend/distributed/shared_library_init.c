@@ -1276,14 +1276,15 @@ RegisterCitusConfigVariables(void)
 	DefineCustomBoolVariable(
 		"citus.hide_citus_dependent_objects",
 		gettext_noop(
-			"Hides any object, which depends on citus extension, from pg meta class queries"),
+			"Hides some objects, which depends on citus extension, from pg meta class queries."
+			"It is intended to be used only before postgres vanilla tests to not break them."),
 		NULL,
 		&HideCitusDependentObjects,
 		false,
 		PGC_USERSET,
 		GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL,
 		NULL, NULL, NULL);
-		
+
 	/*
 	 * This was a GUC we added on Citus 11.0.1, and
 	 * replaced with another name on 11.0.2 via #5920.

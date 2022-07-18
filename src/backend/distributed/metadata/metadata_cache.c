@@ -35,6 +35,7 @@
 #include "commands/extension.h"
 #include "commands/trigger.h"
 #include "distributed/backend_data.h"
+#include "distributed/citus_depended_object.h"
 #include "distributed/colocation_utils.h"
 #include "distributed/connection_management.h"
 #include "distributed/citus_ruleutils.h"
@@ -2903,6 +2904,12 @@ JsonbExtractPathTextFuncId(void)
 Oid
 CitusDependentObjectFuncId(void)
 {
+	if (!HideCitusDependentObjects)
+	{
+		ereport(ERROR, (errmsg(
+							"is_citus_depended_object can only be used while running the regression tests")));
+	}
+
 	if (MetadataCache.CitusDependentObjectFuncId == InvalidOid)
 	{
 		const int argCount = 2;

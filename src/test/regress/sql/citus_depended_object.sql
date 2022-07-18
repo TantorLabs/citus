@@ -1,3 +1,14 @@
+-- create the udf is_citus_depended_object that is needed for the tests
+CREATE OR REPLACE FUNCTION
+    pg_catalog.is_citus_depended_object(oid,oid)
+    RETURNS bool
+    LANGUAGE C
+    AS 'citus', $$is_citus_depended_object$$;
+
+-- execute tests in a separate namespace
+CREATE SCHEMA citus_dependend_object;
+SET search_path TO citus_dependend_object;
+
 -- PG_CLASS VISIBILITY
 -- check if we correctly determine whether a relation is citus dependent or not.
 CREATE TABLE no_hide_pg_class(relname text);
@@ -35,12 +46,6 @@ SELECT relname,
 FROM (VALUES ('pg_dist_shard'), ('pg_dist_placement'), ('pg_type'), ('pg_proc'),
 ('citus_depended_class'), ('citus_depended_class2'), ('citus_independed_class')) rels(relname);
 
-DROP TABLE citus_depended_class;
-DROP TABLE citus_depended_class2;
-DROP TABLE citus_independed_class;
-DROP TABLE no_hide_pg_class;
-DROP TABLE hide_pg_class;
-
 -- PG_TYPE VISIBILITY
 -- check if we correctly determine whether a type is citus dependent or not.
 CREATE TABLE no_hide_pg_type(typname text);
@@ -74,11 +79,6 @@ SELECT typname,
 FROM (VALUES ('noderole'), ('_noderole'), ('int'), ('_int'),
 ('citus_depended_type'), ('citus_independed_type')) types(typname);
 
-DROP TYPE citus_depended_type;
-DROP TYPE citus_independed_type;
-DROP TABLE no_hide_pg_type;
-DROP TABLE hide_pg_type;
-
 -- PG_AM VISIBILITY
 -- check if we correctly determine whether an access method is citus dependent or not.
 CREATE TABLE no_hide_pg_am(amname text);
@@ -107,9 +107,6 @@ EXCEPT
     SELECT amname FROM hide_pg_am
 )
 ORDER BY 1;
-
-DROP TABLE no_hide_pg_am;
-DROP TABLE hide_pg_am;
 
 -- PG_PROC VISIBILITY
 -- check if we correctly determine whether a procedure is citus dependent or not.
@@ -150,7 +147,5 @@ SELECT proname,
 FROM (VALUES ('master_add_node'), ('format'),
 ('citus_depended_proc'), ('citus_independed_proc')) procs(proname);
 
-DROP PROCEDURE citus_depended_proc;
-DROP PROCEDURE citus_independed_proc;
-DROP TABLE no_hide_pg_proc;
-DROP TABLE hide_pg_proc;
+-- drop the namespace with all its objects
+DROP SCHEMA citus_dependend_object CASCADE;
