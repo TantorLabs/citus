@@ -68,11 +68,12 @@ DROP FUNCTION pg_catalog.get_all_active_transactions(OUT datid oid, OUT process_
 #include "udfs/citus_split_shard_by_split_points/11.1-1.sql"
 #include "udfs/worker_split_copy/11.1-1.sql"
 
-CREATE TYPE citus.citus_job_status AS ENUM ('scheduled', 'done', 'error');
+CREATE TYPE citus.citus_job_status AS ENUM ('scheduled', 'running', 'done', 'error');
 ALTER TYPE citus.citus_job_status SET SCHEMA pg_catalog;
 
 CREATE TABLE citus.pg_dist_rebalance_jobs(
     jobid bigserial NOT NULL,
+    pid integer,
     status pg_catalog.citus_job_status default 'scheduled' NOT NULL,
     command text NOT NULL,
     retry_count integer,
