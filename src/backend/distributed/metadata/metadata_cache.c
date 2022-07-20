@@ -145,6 +145,7 @@ typedef struct MetadataCacheData
 	Oid distRebalanceJobsRelationId;
 	Oid distRebalanceJobsJobsIndexId;
 	Oid distRebalanceJobsStatusJobsIndexId;
+	Oid distRebalanceJobsDependRelationId;
 	Oid jobStatusScheduledId;
 	Oid jobStatusRunningId;
 	Oid jobStatusDoneId;
@@ -2399,6 +2400,16 @@ DistRebalanceJobsStatusJobsIdIndexId(void)
 						 &MetadataCache.distRebalanceJobsStatusJobsIndexId);
 
 	return MetadataCache.distRebalanceJobsStatusJobsIndexId;
+}
+
+
+Oid
+DistRebalanceJobsDependRelationId(void)
+{
+	CachedRelationLookup("pg_dist_rebalance_jobs_depend",
+						 &MetadataCache.distRebalanceJobsDependRelationId);
+
+	return MetadataCache.distRebalanceJobsDependRelationId;
 }
 
 

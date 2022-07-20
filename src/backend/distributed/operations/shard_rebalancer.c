@@ -1577,6 +1577,8 @@ RebalanceTableShards(RebalanceOptions *options, Oid shardReplicationModeOid)
 	PlacementUpdateEvent *move = NULL;
 	StringInfoData buf = { 0 };
 	initStringInfo(&buf);
+	bool first = true;
+	int64 prevJobId = 0;
 	foreach_ptr(move, placementUpdateList)
 	{
 		resetStringInfo(&buf);
@@ -1590,7 +1592,10 @@ RebalanceTableShards(RebalanceOptions *options, Oid shardReplicationModeOid)
 						 move->targetNode->workerPort,
 						 quote_literal_cstr(shardTranferModeLabel));
 
-		ScheduleBackgrounRebalanceJob(buf.data);
+		RebalanceJob *job = ScheduleBackgrounRebalanceJob(buf.data, first ? 0 : 1,
+														  &prevJobId);
+		prevJobId = job->jobid;
+		first = false;
 	}
 
 	/*
