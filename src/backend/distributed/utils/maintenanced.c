@@ -911,7 +911,7 @@ RebalanceJobsBackgroundWorkerMain(Datum arg)
 			 * later due to the committing and starting of new transactions
 			 */
 			MemoryContext oldContext = MemoryContextSwitchTo(perJobContext);
-			RebalanceJob *job = GetScheduledRebalanceJob();
+			RebalanceJob *job = GetRunableRebalanceJob();
 			MemoryContextSwitchTo(oldContext);
 
 			if (job)
