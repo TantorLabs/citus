@@ -108,6 +108,7 @@ s/(ERROR: |WARNING: |error:) server closed the connection unexpectedly/\1 connec
 /^\s*before or while processing the request.$/d
 /^\s*connection not open$/d
 /^\s*invalid socket$/d
+s/invalid socket/connection not open/g
 
 # intermediate_results
 s/(ERROR.*)pgsql_job_cache\/([0-9]+_[0-9]+_[0-9]+)\/(.*).data/\1pgsql_job_cache\/xx_x_xxx\/\3.data/g
