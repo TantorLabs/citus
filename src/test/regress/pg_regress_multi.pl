@@ -486,6 +486,13 @@ push(@pgOptions, "citus.show_shards_for_app_name_prefixes='pg_regress'");
 # we disable slow start by default to encourage parallelism within tests
 push(@pgOptions, "citus.executor_slow_start_interval=0ms");
 
+# we set some GUCs to not break postgres vanilla tests
+if($vanillatest)
+{
+    # we enable hiding the citus dependent objects from pg meta class queries to not break postgres vanilla test behaviour
+    push(@pgOptions, "citus.hide_citus_dependent_objects=true");
+}
+
 if ($useMitmproxy)
 {
   # make tests reproducible by never trying to negotiate ssl
@@ -1036,6 +1043,16 @@ sub PreVanillaTest
 if ($vanillatest)
 {
 	$ENV{VANILLATEST} = "1";
+
+    ###
+    # We want to add is_citus_depended_object function to the default db.
+    # But without use-existing flag, pg_regress drops if exist and creates
+    # the default db. Thus, we set use-existing flag and manually create
+    # the default db, citus extension and the is_citus_depended_object
+    # function.
+    ###
+    my $dbName = "regression";
+    PreVanillaTest($dbName);
 
 	if (-f "$vanillaSchedule")
 	{
