@@ -570,7 +570,6 @@ extern List * AlterViewStmtObjectAddress(Node *node, bool missing_ok);
 extern List * PreprocessDropViewStmt(Node *node, const char *queryString,
 									 ProcessUtilityContext processUtilityContext);
 extern char * CreateViewDDLCommand(Oid viewOid);
-extern char * CreateMaterializedViewDDLCommand(Oid matViewOid);
 extern List * GetViewCreationCommandsOfTable(Oid relationId);
 extern List * GetViewCreationTableDDLCommandsOfTable(Oid relationId);
 extern char * AlterViewOwnerCommand(Oid viewOid);
