@@ -40,6 +40,7 @@
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/lwlock.h"
+#include "storage/procarray.h"
 #include "storage/proc.h"
 #include "storage/spin.h"
 #include "storage/s_lock.h"
@@ -392,7 +393,7 @@ StoreAllActiveTransactions(Tuplestorestate *tupleStore, TupleDesc tupleDescripto
 
 		SpinLockAcquire(&currentBackend->mutex);
 
-		if (currentProc->pid == 0)
+		if (!IsBackendPid(currentProc->pid))
 		{
 			/* unused PGPROC slot */
 			SpinLockRelease(&currentBackend->mutex);
@@ -1217,9 +1218,15 @@ ActiveDistributedTransactionNumbers(void)
 		PGPROC *currentProc = &ProcGlobal->allProcs[curBackend];
 		BackendData currentBackendData;
 
+		/*
+		 * Skip if the PGPROC slot is unused. We should normally use
+		 * IsBackendPid() to be able to skip reliably all the exited
+		 * processes. However, that is a costly operation. Instead, we
+		 * rely on IsInDistributedTransaction() below, where an exited
+		 * process cannot have a valid distributed transaction id.
+		 */
 		if (currentProc->pid == 0)
 		{
-			/* unused PGPROC slot */
 			continue;
 		}
 

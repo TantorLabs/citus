@@ -561,7 +561,13 @@ BuildLocalWaitGraph(bool onlyDistributedTx)
 		PGPROC *currentProc = &ProcGlobal->allProcs[curBackend];
 		BackendData currentBackendData;
 
-		/* skip if the PGPROC slot is unused */
+		/*
+		 * Skip if the PGPROC slot is unused. We should normally use
+		 * IsBackendPid() to be able to skip reliably all the exited
+		 * processes. However, that is a costly operation. Instead, we
+		 * rely on IsProcessWaitingForLock() below, where an exited
+		 * process cannot be in the waiting state.
+		 */
 		if (currentProc->pid == 0)
 		{
 			continue;
