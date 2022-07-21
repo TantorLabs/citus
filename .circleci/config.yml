@@ -6,16 +6,16 @@ orbs:
 parameters:
   image_suffix:
     type: string
-    default: '-dev-b07a192'
+    default: '-dev-a983dbe'
   pg13_version:
     type: string
-    default: '13.4'
+    default: '13.7'
   pg14_version:
     type: string
-    default: '14.0'
+    default: '14.4'
   upgrade_pg_versions:
     type: string
-    default: '13.4-14.0'
+    default: '13.7-14.4'
 jobs:
   build:
     description: Build the citus extension
