@@ -393,7 +393,7 @@ StoreAllActiveTransactions(Tuplestorestate *tupleStore, TupleDesc tupleDescripto
 
 		SpinLockAcquire(&currentBackend->mutex);
 
-		if (!IsBackendPid(currentProc->pid))
+		if (!currentBackend->activeBackend)
 		{
 			/* unused PGPROC slot */
 			SpinLockRelease(&currentBackend->mutex);
@@ -699,6 +699,8 @@ InitializeBackendData(void)
 	UnSetDistributedTransactionId();
 	UnSetGlobalPID();
 
+	MyBackendData->activeBackend = true;
+
 	UnlockBackendSharedMemory();
 }
 
@@ -741,6 +743,21 @@ UnSetGlobalPID(void)
 		MyBackendData->databaseId = 0;
 		MyBackendData->userId = 0;
 		MyBackendData->distributedCommandOriginator = false;
+
+		SpinLockRelease(&MyBackendData->mutex);
+	}
+}
+
+
+void
+UnSetActiveMyBackend(void)
+{
+	/* backend does not exist if the extension is not created */
+	if (MyBackendData)
+	{
+		SpinLockAcquire(&MyBackendData->mutex);
+
+		MyBackendData->activeBackend = false;
 
 		SpinLockRelease(&MyBackendData->mutex);
 	}
@@ -1218,19 +1235,18 @@ ActiveDistributedTransactionNumbers(void)
 		PGPROC *currentProc = &ProcGlobal->allProcs[curBackend];
 		BackendData currentBackendData;
 
-		/*
-		 * Skip if the PGPROC slot is unused. We should normally use
-		 * IsBackendPid() to be able to skip reliably all the exited
-		 * processes. However, that is a costly operation. Instead, we
-		 * rely on IsInDistributedTransaction() below, where an exited
-		 * process cannot have a valid distributed transaction id.
-		 */
-		if (currentProc->pid == 0)
+		GetBackendDataForProc(currentProc, &currentBackendData);
+
+		if (!currentBackendData.activeBackend)
 		{
+			/*
+			 * Skip if the PGPROC slot is unused. We should normally use
+			 * IsBackendPid() to be able to skip reliably all the exited
+			 * processes. However, that is a costly operation. Instead, we
+			 * keep track of activeBackend in Citus code.
+			 */
 			continue;
 		}
-
-		GetBackendDataForProc(currentProc, &currentBackendData);
 
 		if (!IsInDistributedTransaction(&currentBackendData))
 		{
