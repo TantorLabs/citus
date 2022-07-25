@@ -14,7 +14,6 @@ all: columnar
 
 # build columnar only
 columnar:
-	./configure
 	$(MAKE) -C src/backend/columnar all
 
 install:
