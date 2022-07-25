@@ -1,7 +1,5 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION citus_columnar" to load this file. \quit
-
--- columnar--9.5-1--10.0-1.sql
+\echo Use "CREATE EXTENSION pg_columnar" to load this file. \quit
 
 CREATE SCHEMA IF NOT EXISTS columnar;
 SET search_path TO columnar;
@@ -382,7 +380,7 @@ SELECT columnar_internal.columnar_ensure_am_depends_catalog();
 
 CREATE FUNCTION columnar.get_storage_id(regclass) RETURNS bigint
     LANGUAGE C STRICT
-    AS 'citus_columnar', $$columnar_relation_storageid$$;
+    AS 'pg_columnar', $$columnar_relation_storageid$$;
 
 -- create views for columnar table information
 
