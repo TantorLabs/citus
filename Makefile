@@ -17,7 +17,7 @@ columnar:
 	./configure
 	$(MAKE) -C src/backend/columnar all
 
-install: columnar
+install:
 	$(MAKE) -C src/backend/columnar install
 
 clean:
