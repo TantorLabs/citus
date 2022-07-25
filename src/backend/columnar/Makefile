@@ -7,8 +7,8 @@ ENSURE_SUBDIRS_EXIST := $(shell mkdir -p $(SUBDIRS))
 OBJS += \
 	$(patsubst $(citus_abs_srcdir)/%.c,%.o,$(foreach dir,$(SUBDIRS), $(sort $(wildcard $(citus_abs_srcdir)/$(dir)/*.c))))
 
-MODULE_big = citus_columnar
-EXTENSION = citus_columnar
+MODULE_big = pg_columnar
+EXTENSION = pg_columnar
 
 columnar_sql_files = $(patsubst $(citus_abs_srcdir)/%,%,$(wildcard $(citus_abs_srcdir)/sql/*.sql))
 columnar_downgrade_sql_files = $(patsubst $(citus_abs_srcdir)/%,%,$(wildcard $(citus_abs_srcdir)/sql/downgrades/*.sql))

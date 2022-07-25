@@ -4,10 +4,8 @@ citus_subdir = .
 citus_top_builddir = .
 extension_dir = $(shell $(PG_CONFIG) --sharedir)/extension
 
-# Hint that configure should be run first
-ifeq (,$(wildcard Makefile.global))
-  $(error ./configure needs to be run before compiling Citus)
-endif
+Makefile.global:
+	./configure
 
 include Makefile.global
 
