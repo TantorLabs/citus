@@ -1434,7 +1434,12 @@ BuildStripeMetadata(Relation columnarStripes, HeapTuple heapTuple)
 	 * have been flushed already. For this reason, we don't care about
 	 * subtransaction id here.
 	 */
+	/* HeapTupleHeaderGetXmin removed from PG16 with XID64_patch 
+	using HeapTupleGetXmin instead
 	TransactionId entryXmin = HeapTupleHeaderGetXmin(heapTuple->t_data);
+	TODO: conditional build, for std and XID64_patch
+	*/
+	TransactionId entryXmin = HeapTupleGetXmin(heapTuple);
 	stripeMetadata->aborted = !TransactionIdIsInProgress(entryXmin) &&
 							  TransactionIdDidAbort(entryXmin);
 	stripeMetadata->insertedByCurrentXact =
