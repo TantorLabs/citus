@@ -379,12 +379,6 @@ CREATE INDEX dist_part_table_btree ON dist_part_table (col1);
 CREATE TABLE p0 PARTITION OF dist_part_table
 FOR VALUES FROM ('2020-01-01') TO ('2020-02-01')
 USING columnar;
-SELECT create_distributed_table('dist_part_table', 'dist_col');
- create_distributed_table
----------------------------------------------------------------------
-
-(1 row)
-
 -- columnar partition
 CREATE TABLE p1 PARTITION OF dist_part_table
 FOR VALUES FROM ('2020-02-01') TO ('2020-03-01')
