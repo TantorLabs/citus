@@ -443,6 +443,9 @@ if ($vanillatest) {
     push(@pgOptions, "max_parallel_workers_per_gather=0");
 }
 
+# Transactions test
+push(@pgOptions, "max_prepared_transactions=10");
+
 # Help with debugging
 push(@pgOptions, "log_error_verbosity = 'verbose'");
 

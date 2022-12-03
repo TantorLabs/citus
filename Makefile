@@ -24,6 +24,6 @@ install:
 
 # depend on install-all so that downgrade scripts are installed as well
 check: all
-	$(MAKE) -C src/test/regress check-full
+	$(MAKE) -C src/test/regress check-columnar
 
 .PHONY: all check clean install
