@@ -944,11 +944,6 @@ if (!$conninfo)
                 '-c', "CREATE DATABASE regression;")) == 0
             or die "Could not create regression database on worker port $port.";
 
-        my $firstLib = `psql -h "$host" -p "$port" -U "$user" -d regression -AXqt \\
-                        -c "SHOW shared_preload_libraries;" | cut -d ',' -f1`;
-        ($firstLib =~ m/^citus$/)
-            or die "Could not find citus as first library in shared_preload_libraries on worker $port.";
-
         for my $extension (@extensions)
         {
             system(catfile($bindir, "psql"),
