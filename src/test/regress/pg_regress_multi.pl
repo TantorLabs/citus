@@ -951,22 +951,6 @@ if (!$conninfo)
                     '-c', "CREATE EXTENSION IF NOT EXISTS $extension;")) == 0
                 or die "Could not create extension $extension on worker port $port.";
         }
-
-        foreach my $function (keys %functions)
-        {
-            system(catfile($bindir, "psql"),
-                    ('-X', '-h', $host, '-p', $port, '-U', $user, "-d", "regression",
-                    '-c', "CREATE FUNCTION $function RETURNS $functions{$function};")) == 0
-                or die "Could not create function $function on worker port $port";
-        }
-
-        foreach my $fdw (keys %fdws)
-        {
-            system(catfile($bindir, "psql"),
-                    ('-X', '-h', $host, '-p', $port, '-U', $user, "-d", "regression",
-                    '-c', "CREATE FOREIGN DATA WRAPPER $fdw HANDLER $fdws{$fdw};")) == 0
-                or die "Could not create foreign data wrapper $fdw on worker port $port";
-        }
     }
 }
 else
