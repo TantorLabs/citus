@@ -414,7 +414,7 @@ if (! $vanillatest)
     push(@pgOptions, "extra_float_digits=0");
 }
 
-my $sharedPreloadLibraries = "citus";
+my $sharedPreloadLibraries = "";
 
 # check if pg_stat_statements extension is installed
 # if it is add it to shared preload libraries
@@ -423,7 +423,7 @@ chomp $sharedir;
 my $pg_stat_statements_control = catfile($sharedir, "extension", "pg_stat_statements.control");
 if (-e $pg_stat_statements_control)
 {
-	$sharedPreloadLibraries .= ',pg_stat_statements';
+	$sharedPreloadLibraries .= 'pg_stat_statements';
 }
 
 # check if hll extension is installed
