@@ -47,6 +47,19 @@
 /* Table Conversion Types */
 #define ALTER_TABLE_SET_ACCESS_METHOD 'm'
 
+typedef struct TableConversionReturn
+{
+	/*
+	 * commands to create foreign keys for the table
+	 *
+	 * When the table conversion is cascaded we can recreate
+	 * some of the foreign keys of the cascaded tables. So with this
+	 * list we can return it to the initial conversion operation so
+	 * foreign keys can be created after every colocated table is
+	 * converted.
+	 */
+	List *foreignKeyCommands;
+}TableConversionReturn;
 
 typedef TableConversionReturn *(*TableConversionFunction)(struct
 														  TableConversionParameters *);
@@ -87,12 +100,6 @@ typedef struct TableConversionState
 	int shardCount;
 	char *colocateWith;
 	char *accessMethod;
-
-	/*
-	 * cascadeToColocated determines whether the shardCount and
-	 * colocateWith will be cascaded to the currently colocated tables
-	 */
-	CascadeToColocatedOption cascadeToColocated;
 
 	/*
 	 * cascadeViaForeignKeys determines if the conversion operation
