@@ -47,6 +47,69 @@
 /* Table Conversion Types */
 #define ALTER_TABLE_SET_ACCESS_METHOD 'm'
 
+/*
+ * TableConversionParameters are the parameters that are given to
+ * table conversion UDFs: undistribute_table, alter_distributed_table,
+ * alter_table_set_access_method.
+ *
+ * When passing a TableConversionParameters object to one of the table
+ * conversion functions some of the parameters needs to be set:
+ * UndistributeTable: relationId
+ * AlterDistributedTable: relationId, distributionColumn, shardCountIsNull,
+ * shardCount, colocateWith, cascadeToColocated
+ * AlterTableSetAccessMethod: relationId, accessMethod
+ *
+ * conversionType parameter will be automatically set by the function.
+ *
+ * TableConversionState objects can be created using TableConversionParameters
+ * objects with CreateTableConversion function.
+ */
+typedef struct TableConversionParameters
+{
+	/*
+	 * Determines type of conversion: UNDISTRIBUTE_TABLE,
+	 * ALTER_DISTRIBUTED_TABLE, ALTER_TABLE_SET_ACCESS_METHOD.
+	 */
+	char conversionType;
+
+	/* Oid of the table to do conversion on */
+	Oid relationId;
+
+	/*
+	 * Options to do conversions on the table
+	 * distributionColumn is the name of the new distribution column,
+	 * shardCountIsNull is if the shardCount variable is not given
+	 * shardCount is the new shard count,
+	 * colocateWith is the name of the table to colocate with, 'none', or
+	 * 'default'
+	 * accessMethod is the name of the new accessMethod for the table
+	 */
+	char *distributionColumn;
+	bool shardCountIsNull;
+	int shardCount;
+	char *colocateWith;
+	char *accessMethod;
+
+	/*
+	 * cascadeToColocated determines whether the shardCount and
+	 * colocateWith will be cascaded to the currently colocated tables
+	 */
+	CascadeToColocatedOption cascadeToColocated;
+
+	/*
+	 * cascadeViaForeignKeys determines if the conversion operation
+	 * will be cascaded to the graph connected with foreign keys
+	 * to the table
+	 */
+	bool cascadeViaForeignKeys;
+
+	/*
+	 * suppressNoticeMessages determines if we want to suppress NOTICE
+	 * messages that we explicitly issue
+	 */
+	bool suppressNoticeMessages;
+} TableConversionParameters;
+
 typedef struct TableConversionReturn
 {
 	/*
