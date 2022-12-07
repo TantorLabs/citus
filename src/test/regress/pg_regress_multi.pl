@@ -414,7 +414,7 @@ if (! $vanillatest)
     push(@pgOptions, "extra_float_digits=0");
 }
 
-my $sharedPreloadLibraries = "citus";
+my $sharedPreloadLibraries = "";
 
 # check if pg_stat_statements extension is installed
 # if it is add it to shared preload libraries
@@ -423,7 +423,7 @@ chomp $sharedir;
 my $pg_stat_statements_control = catfile($sharedir, "extension", "pg_stat_statements.control");
 if (-e $pg_stat_statements_control)
 {
-	$sharedPreloadLibraries .= ',pg_stat_statements';
+	$sharedPreloadLibraries .= 'pg_stat_statements';
 }
 
 # check if hll extension is installed
@@ -442,6 +442,9 @@ if ($vanillatest) {
     # Avoid parallelism to stabilize explain plans
     push(@pgOptions, "max_parallel_workers_per_gather=0");
 }
+
+# Transactions test
+push(@pgOptions, "max_prepared_transactions=10");
 
 # Help with debugging
 push(@pgOptions, "log_error_verbosity = 'verbose'");
@@ -941,33 +944,12 @@ if (!$conninfo)
                 '-c', "CREATE DATABASE regression;")) == 0
             or die "Could not create regression database on worker port $port.";
 
-        my $firstLib = `psql -h "$host" -p "$port" -U "$user" -d regression -AXqt \\
-                        -c "SHOW shared_preload_libraries;" | cut -d ',' -f1`;
-        ($firstLib =~ m/^citus$/)
-            or die "Could not find citus as first library in shared_preload_libraries on worker $port.";
-
         for my $extension (@extensions)
         {
             system(catfile($bindir, "psql"),
                 ('-X', '-h', $host, '-p', $port, '-U', $user, "-d", "regression",
                     '-c', "CREATE EXTENSION IF NOT EXISTS $extension;")) == 0
                 or die "Could not create extension $extension on worker port $port.";
-        }
-
-        foreach my $function (keys %functions)
-        {
-            system(catfile($bindir, "psql"),
-                    ('-X', '-h', $host, '-p', $port, '-U', $user, "-d", "regression",
-                    '-c', "CREATE FUNCTION $function RETURNS $functions{$function};")) == 0
-                or die "Could not create function $function on worker port $port";
-        }
-
-        foreach my $fdw (keys %fdws)
-        {
-            system(catfile($bindir, "psql"),
-                    ('-X', '-h', $host, '-p', $port, '-U', $user, "-d", "regression",
-                    '-c', "CREATE FOREIGN DATA WRAPPER $fdw HANDLER $fdws{$fdw};")) == 0
-                or die "Could not create foreign data wrapper $fdw on worker port $port";
         }
     }
 }

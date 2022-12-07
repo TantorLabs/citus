@@ -95,7 +95,7 @@ ORDER BY 1, 2;
 
 -- DROP EXTENSION pre-created by the regression suite
 DROP EXTENSION citus;
-DROP EXTENSION citus_columnar;
+DROP EXTENSION pg_columnar;
 \c
 -- these tests switch between citus versions and call ddl's that require pg_dist_object to be created
 SET citus.enable_metadata_sync TO 'false';
@@ -1214,7 +1214,7 @@ ORDER BY 1, 2;
 RESET citus.enable_version_checks;
 RESET columnar.enable_version_checks;
 DROP EXTENSION citus;
-DROP EXTENSION citus_columnar;
+DROP EXTENSION pg_columnar;
 CREATE EXTENSION citus VERSION '8.0-1';
 ERROR:  specified version incompatible with loaded Citus library
 DETAIL:  Loaded library requires 11.1, but 8.0-1 was specified.
@@ -1291,13 +1291,13 @@ NOTICE:  version "9.1-1" of extension "citus" is already installed
 ALTER EXTENSION citus UPDATE;
 -- re-create in newest version
 DROP EXTENSION citus;
-DROP EXTENSION citus_columnar;
+DROP EXTENSION pg_columnar;
 \c
 CREATE EXTENSION citus;
 -- test cache invalidation in workers
 \c - - - :worker_1_port
 DROP EXTENSION citus;
-DROP EXTENSION citus_columnar;
+DROP EXTENSION pg_columnar;
 SET citus.enable_version_checks TO 'false';
 SET columnar.enable_version_checks TO 'false';
 CREATE EXTENSION citus VERSION '8.0-1';

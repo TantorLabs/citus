@@ -1435,11 +1435,14 @@ BuildStripeMetadata(Relation columnarStripes, HeapTuple heapTuple)
 	 * subtransaction id here.
 	 */
 	/* HeapTupleHeaderGetXmin removed from PG16 with XID64_patch 
-	using HeapTupleGetXmin instead
-	TransactionId entryXmin = HeapTupleHeaderGetXmin(heapTuple->t_data);
-	TODO: conditional build, for std and XID64_patch
+	 * using HeapTupleGetXmin instead
 	*/
+#ifdef HAVE_INT64_XID
 	TransactionId entryXmin = HeapTupleGetXmin(heapTuple);
+#else
+	TransactionId entryXmin = HeapTupleHeaderGetXmin(heapTuple->t_data);
+#endif
+
 	stripeMetadata->aborted = !TransactionIdIsInProgress(entryXmin) &&
 							  TransactionIdDidAbort(entryXmin);
 	stripeMetadata->insertedByCurrentXact =
