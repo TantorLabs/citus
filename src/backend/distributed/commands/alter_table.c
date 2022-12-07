@@ -294,37 +294,6 @@ ConvertTable(TableConversionState *con)
 {
 	InTableTypeConversionFunctionCall = true;
 
-	/*
-	 * We undistribute citus local tables that are not chained with any reference
-	 * tables via foreign keys at the end of the utility hook.
-	 * Here we temporarily set the related GUC to off to disable the logic for
-	 * internally executed DDL's that might invoke this mechanism unnecessarily.
-	 */
-	bool oldEnableLocalReferenceForeignKeys = EnableLocalReferenceForeignKeys;
-	SetLocalEnableLocalReferenceForeignKeys(false);
-
-	/* switch to sequential execution if shard names will be too long */
-	SwitchToSequentialAndLocalExecutionIfRelationNameTooLong(con->relationId,
-															 con->relationName);
-
-	if (con->conversionType == UNDISTRIBUTE_TABLE && con->cascadeViaForeignKeys &&
-		(TableReferencing(con->relationId) || TableReferenced(con->relationId)))
-	{
-		/*
-		 * Acquire ExclusiveLock as UndistributeTable does in order to
-		 * make sure that no modifications happen on the relations.
-		 */
-		CascadeOperationForFkeyConnectedRelations(con->relationId, ExclusiveLock,
-												  CASCADE_FKEY_UNDISTRIBUTE_TABLE);
-
-		/*
-		 * Undistributed every foreign key connected relation in our foreign key
-		 * subgraph including itself, so return here.
-		 */
-		SetLocalEnableLocalReferenceForeignKeys(oldEnableLocalReferenceForeignKeys);
-		InTableTypeConversionFunctionCall = false;
-		return NULL;
-	}
 	char *newAccessMethod = con->accessMethod ? con->accessMethod :
 							con->originalAccessMethod;
 	IncludeSequenceDefaults includeSequenceDefaults = NEXTVAL_SEQUENCE_DEFAULTS;
@@ -355,28 +324,6 @@ ConvertTable(TableConversionState *con)
 					GetViewCreationTableDDLCommandsOfTable(con->relationId));
 
 	List *foreignKeyCommands = NIL;
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		foreignKeyCommands = GetForeignConstraintToReferenceTablesCommands(
-			con->relationId);
-		if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES ||
-			con->cascadeToColocated == CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED)
-		{
-			List *foreignKeyToDistributedTableCommands =
-				GetForeignConstraintToDistributedTablesCommands(con->relationId);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 foreignKeyToDistributedTableCommands);
-
-			List *foreignKeyFromDistributedTableCommands =
-				GetForeignConstraintFromDistributedTablesCommands(con->relationId);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 foreignKeyFromDistributedTableCommands);
-		}
-		else
-		{
-			WarningsForDroppingForeignKeysWithDistributedTables(con->relationId);
-		}
-	}
 
 	bool isPartitionTable = false;
 	char *attachToParentCommand = NULL;
@@ -509,41 +456,6 @@ ConvertTable(TableConversionState *con)
 
 	con->newRelationId = get_relname_relid(con->tempName, con->schemaId);
 
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		CreateDistributedTableLike(con);
-	}
-	else if (con->conversionType == ALTER_TABLE_SET_ACCESS_METHOD)
-	{
-		CreateCitusTableLike(con);
-	}
-
-	/* preserve colocation with procedures/functions */
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		/*
-		 * Updating the colocationId of functions is always desirable for
-		 * the following scenario:
-		 *    we have shardCount or colocateWith change
-		 *    AND  entire co-location group is altered
-		 * The reason for the second condition is because we currently don't
-		 * remember the original table specified in the colocateWith when
-		 * distributing the function. We only remember the colocationId in
-		 * pg_dist_object table.
-		 */
-		if ((!con->shardCountIsNull || con->colocateWith != NULL) &&
-			(con->cascadeToColocated == CASCADE_TO_COLOCATED_YES || list_length(
-				 con->colocatedTableList) == 1) && con->distributionColumn == NULL)
-		{
-			/*
-			 * Update the colocationId from the one of the old relation to the one
-			 * of the new relation for all tuples in citus.pg_dist_object
-			 */
-			UpdateDistributedObjectColocationId(TableColocationId(con->relationId),
-												TableColocationId(con->newRelationId));
-		}
-	}
-
 	ReplaceTable(con->relationId, con->newRelationId, justBeforeDropCommands,
 				 con->suppressNoticeMessages);
 
@@ -570,58 +482,11 @@ ConvertTable(TableConversionState *con)
 		ExecuteQueryViaSPI(attachToParentCommand, SPI_OK_UTILITY);
 	}
 
-	if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES)
-	{
-		Oid colocatedTableId = InvalidOid;
-
-		/* For now we only support cascade to colocation for alter_distributed_table UDF */
-		Assert(con->conversionType == ALTER_DISTRIBUTED_TABLE);
-		foreach_oid(colocatedTableId, con->colocatedTableList)
-		{
-			if (colocatedTableId == con->relationId)
-			{
-				continue;
-			}
-			char *qualifiedRelationName = quote_qualified_identifier(con->schemaName,
-																	 con->relationName);
-
-			TableConversionParameters cascadeParam = {
-				.relationId = colocatedTableId,
-				.shardCountIsNull = con->shardCountIsNull,
-				.shardCount = con->shardCount,
-				.colocateWith = qualifiedRelationName,
-				.cascadeToColocated = CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED,
-				.suppressNoticeMessages = con->suppressNoticeMessages
-			};
-			TableConversionReturn *colocatedReturn = con->function(&cascadeParam);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 colocatedReturn->foreignKeyCommands);
-		}
-	}
-
 	/* recreate foreign keys */
 	TableConversionReturn *ret = NULL;
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		if (con->cascadeToColocated != CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED)
-		{
-			char *foreignKeyCommand = NULL;
-			foreach_ptr(foreignKeyCommand, foreignKeyCommands)
-			{
-				ExecuteQueryViaSPI(foreignKeyCommand, SPI_OK_UTILITY);
-			}
-		}
-		else
-		{
-			ret = palloc0(sizeof(TableConversionReturn));
-			ret->foreignKeyCommands = foreignKeyCommands;
-		}
-	}
 
 	/* increment command counter so that next command can see the new table */
 	CommandCounterIncrement();
-
-	SetLocalEnableLocalReferenceForeignKeys(oldEnableLocalReferenceForeignKeys);
 
 	InTableTypeConversionFunctionCall = false;
 	return ret;
