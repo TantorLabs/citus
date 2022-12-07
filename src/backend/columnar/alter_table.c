@@ -37,28 +37,6 @@
 #include "columnar/columnar.h"
 #include "columnar/columnar_tableam.h"
 #include "commands/defrem.h"
-#include "distributed/colocation_utils.h"
-#include "distributed/commands.h"
-#include "distributed/commands/utility_hook.h"
-#include "distributed/coordinator_protocol.h"
-#include "distributed/deparser.h"
-#include "distributed/distribution_column.h"
-#include "distributed/hash_helpers.h"
-#include "distributed/listutils.h"
-#include "distributed/local_executor.h"
-#include "distributed/metadata/dependency.h"
-#include "distributed/metadata/distobject.h"
-#include "distributed/metadata_cache.h"
-#include "distributed/metadata_sync.h"
-#include "distributed/multi_executor.h"
-#include "distributed/multi_logical_planner.h"
-#include "distributed/multi_partitioning_utils.h"
-#include "distributed/reference_table_utils.h"
-#include "distributed/relation_access_tracking.h"
-#include "distributed/shared_library_init.h"
-#include "distributed/shard_utils.h"
-#include "distributed/worker_protocol.h"
-#include "distributed/worker_transaction.h"
 #include "executor/spi.h"
 #include "nodes/pg_list.h"
 #include "utils/builtins.h"
@@ -67,14 +45,7 @@
 
 
 /* Table Conversion Types */
-#define UNDISTRIBUTE_TABLE 'u'
-#define ALTER_DISTRIBUTED_TABLE 'a'
 #define ALTER_TABLE_SET_ACCESS_METHOD 'm'
-
-#define UNDISTRIBUTE_TABLE_CASCADE_HINT \
-	"Use cascade option to undistribute all the relations involved in " \
-	"a foreign key relationship with %s by executing SELECT " \
-	"undistribute_table($$%s$$, cascade_via_foreign_keys=>true)"
 
 
 typedef TableConversionReturn *(*TableConversionFunction)(struct
@@ -179,12 +150,9 @@ typedef struct TableConversionState
 } TableConversionState;
 
 
-static TableConversionReturn * AlterDistributedTable(TableConversionParameters *params);
 static TableConversionReturn * AlterTableSetAccessMethod(
 	TableConversionParameters *params);
 static TableConversionReturn * ConvertTable(TableConversionState *con);
-static bool SwitchToSequentialAndLocalExecutionIfShardNameTooLong(char *relationName,
-																  char *longestShardName);
 static void DropIndexesNotSupportedByColumnar(Oid relationId,
 											  bool suppressNoticeMessages);
 static char * GetIndexAccessMethodName(Oid indexId);
@@ -195,123 +163,25 @@ static void EnsureTableNotReferenced(Oid relationId, char conversionType);
 static void EnsureTableNotForeign(Oid relationId);
 static void EnsureTableNotPartition(Oid relationId);
 static TableConversionState * CreateTableConversion(TableConversionParameters *params);
-static void CreateDistributedTableLike(TableConversionState *con);
-static void CreateCitusTableLike(TableConversionState *con);
 static void ReplaceTable(Oid sourceId, Oid targetId, List *justBeforeDropCommands,
 						 bool suppressNoticeMessages);
 static bool HasAnyGeneratedStoredColumns(Oid relationId);
 static List * GetNonGeneratedStoredColumnNameList(Oid relationId);
-static void CheckAlterDistributedTableConversionParameters(TableConversionState *con);
-static char * CreateWorkerChangeSequenceDependencyCommand(char *sequenceSchemaName,
-														  char *sequenceName,
-														  char *sourceSchemaName,
-														  char *sourceName,
-														  char *targetSchemaName,
-														  char *targetName);
 static void ErrorIfMatViewSizeExceedsTheLimit(Oid matViewOid);
 static char * CreateMaterializedViewDDLCommand(Oid matViewOid);
 static char * GetAccessMethodForMatViewIfExists(Oid viewOid);
 static bool WillRecreateForeignKeyToReferenceTable(Oid relationId,
 												   CascadeToColocatedOption cascadeOption);
-static void WarningsForDroppingForeignKeysWithDistributedTables(Oid relationId);
 static void ErrorIfUnsupportedCascadeObjects(Oid relationId);
 static bool DoesCascadeDropUnsupportedObject(Oid classId, Oid id, HTAB *nodeMap);
 
-PG_FUNCTION_INFO_V1(undistribute_table);
-PG_FUNCTION_INFO_V1(alter_distributed_table);
 PG_FUNCTION_INFO_V1(alter_table_set_access_method);
-PG_FUNCTION_INFO_V1(worker_change_sequence_dependency);
 
 /* global variable keeping track of whether we are in a table type conversion function */
 bool InTableTypeConversionFunctionCall = false;
 
 /* controlled by GUC, in MB */
 int MaxMatViewSizeToAutoRecreate = 1024;
-
-/*
- * undistribute_table gets a distributed table name and
- * udistributes it.
- */
-Datum
-undistribute_table(PG_FUNCTION_ARGS)
-{
-	CheckCitusVersion(ERROR);
-
-	Oid relationId = PG_GETARG_OID(0);
-	bool cascadeViaForeignKeys = PG_GETARG_BOOL(1);
-
-	TableConversionParameters params = {
-		.relationId = relationId,
-		.cascadeViaForeignKeys = cascadeViaForeignKeys
-	};
-
-	UndistributeTable(&params);
-
-	PG_RETURN_VOID();
-}
-
-
-/*
- * alter_distributed_table gets a distributed table and some other
- * parameters and alters some properties of the table according to
- * the parameters.
- */
-Datum
-alter_distributed_table(PG_FUNCTION_ARGS)
-{
-	CheckCitusVersion(ERROR);
-
-	Oid relationId = PG_GETARG_OID(0);
-
-	char *distributionColumn = NULL;
-	if (!PG_ARGISNULL(1))
-	{
-		text *distributionColumnText = PG_GETARG_TEXT_P(1);
-		distributionColumn = text_to_cstring(distributionColumnText);
-	}
-
-	int shardCount = 0;
-	bool shardCountIsNull = true;
-	if (!PG_ARGISNULL(2))
-	{
-		shardCount = PG_GETARG_INT32(2);
-		shardCountIsNull = false;
-	}
-
-	char *colocateWith = NULL;
-	if (!PG_ARGISNULL(3))
-	{
-		text *colocateWithText = PG_GETARG_TEXT_P(3);
-		colocateWith = text_to_cstring(colocateWithText);
-	}
-
-	CascadeToColocatedOption cascadeToColocated = CASCADE_TO_COLOCATED_UNSPECIFIED;
-	if (!PG_ARGISNULL(4))
-	{
-		if (PG_GETARG_BOOL(4) == true)
-		{
-			cascadeToColocated = CASCADE_TO_COLOCATED_YES;
-		}
-		else
-		{
-			cascadeToColocated = CASCADE_TO_COLOCATED_NO;
-		}
-	}
-
-	TableConversionParameters params = {
-		.relationId = relationId,
-		.distributionColumn = distributionColumn,
-		.shardCountIsNull = shardCountIsNull,
-		.shardCount = shardCount,
-		.colocateWith = colocateWith,
-		.cascadeToColocated = cascadeToColocated
-	};
-
-	AlterDistributedTable(&params);
-
-	PG_RETURN_VOID();
-}
-
 
 /*
  * alter_table_set_access_method gets a distributed table and an access
@@ -335,113 +205,6 @@ alter_table_set_access_method(PG_FUNCTION_ARGS)
 	AlterTableSetAccessMethod(&params);
 
 	PG_RETURN_VOID();
-}
-
-
-/*
- * worker_change_sequence_dependency is a wrapper UDF for
- * changeDependencyFor function
- */
-Datum
-worker_change_sequence_dependency(PG_FUNCTION_ARGS)
-{
-	Oid sequenceOid = PG_GETARG_OID(0);
-	Oid sourceRelationOid = PG_GETARG_OID(1);
-	Oid targetRelationOid = PG_GETARG_OID(2);
-
-	changeDependencyFor(RelationRelationId, sequenceOid,
-						RelationRelationId, sourceRelationOid, targetRelationOid);
-	PG_RETURN_VOID();
-}
-
-
-/*
- * UndistributeTable undistributes the given table. It uses ConvertTable function to
- * create a new local table and move everything to that table.
- *
- * The local tables, tables with references, partition tables and foreign tables are
- * not supported. The function gives errors in these cases.
- */
-TableConversionReturn *
-UndistributeTable(TableConversionParameters *params)
-{
-	EnsureCoordinator();
-	EnsureRelationExists(params->relationId);
-	EnsureTableOwner(params->relationId);
-
-	if (!IsCitusTable(params->relationId))
-	{
-		ereport(ERROR, (errmsg("cannot undistribute table "
-							   "because the table is not distributed")));
-	}
-
-	if (!params->cascadeViaForeignKeys)
-	{
-		EnsureTableNotReferencing(params->relationId, UNDISTRIBUTE_TABLE);
-		EnsureTableNotReferenced(params->relationId, UNDISTRIBUTE_TABLE);
-	}
-
-	EnsureTableNotPartition(params->relationId);
-
-	if (PartitionedTable(params->relationId))
-	{
-		List *partitionList = PartitionList(params->relationId);
-
-		/*
-		 * This is a less common pattern where foreing key is directly from/to
-		 * the partition relation as we already handled inherited foreign keys
-		 * on partitions either by erroring out or cascading via foreign keys.
-		 * It seems an acceptable limitation for now to ask users to drop such
-		 * foreign keys manually.
-		 */
-		ErrorIfAnyPartitionRelationInvolvedInNonInheritedFKey(partitionList);
-	}
-
-	ErrorIfUnsupportedCascadeObjects(params->relationId);
-
-	params->conversionType = UNDISTRIBUTE_TABLE;
-	params->shardCountIsNull = true;
-	TableConversionState *con = CreateTableConversion(params);
-	return ConvertTable(con);
-}
-
-
-/*
- * AlterDistributedTable changes some properties of the given table. It uses
- * ConvertTable function to create a new local table and move everything to that table.
- *
- * The local and reference tables, tables with references, partition tables and foreign
- * tables are not supported. The function gives errors in these cases.
- */
-TableConversionReturn *
-AlterDistributedTable(TableConversionParameters *params)
-{
-	EnsureCoordinator();
-	EnsureRelationExists(params->relationId);
-	EnsureTableOwner(params->relationId);
-
-	if (!IsCitusTableType(params->relationId, DISTRIBUTED_TABLE))
-	{
-		ereport(ERROR, (errmsg("cannot alter table because the table "
-							   "is not distributed")));
-	}
-
-	EnsureTableNotForeign(params->relationId);
-	EnsureTableNotPartition(params->relationId);
-	EnsureHashDistributedTable(params->relationId);
-
-	ErrorIfUnsupportedCascadeObjects(params->relationId);
-
-	params->conversionType = ALTER_DISTRIBUTED_TABLE;
-	TableConversionState *con = CreateTableConversion(params);
-	CheckAlterDistributedTableConversionParameters(con);
-
-	if (WillRecreateForeignKeyToReferenceTable(con->relationId, con->cascadeToColocated))
-	{
-		ereport(DEBUG1, (errmsg("setting multi shard modify mode to sequential")));
-		SetLocalMultiShardModifyModeToSequential();
-	}
-	return ConvertTable(con);
 }
 
 
@@ -531,37 +294,6 @@ ConvertTable(TableConversionState *con)
 {
 	InTableTypeConversionFunctionCall = true;
 
-	/*
-	 * We undistribute citus local tables that are not chained with any reference
-	 * tables via foreign keys at the end of the utility hook.
-	 * Here we temporarily set the related GUC to off to disable the logic for
-	 * internally executed DDL's that might invoke this mechanism unnecessarily.
-	 */
-	bool oldEnableLocalReferenceForeignKeys = EnableLocalReferenceForeignKeys;
-	SetLocalEnableLocalReferenceForeignKeys(false);
-
-	/* switch to sequential execution if shard names will be too long */
-	SwitchToSequentialAndLocalExecutionIfRelationNameTooLong(con->relationId,
-															 con->relationName);
-
-	if (con->conversionType == UNDISTRIBUTE_TABLE && con->cascadeViaForeignKeys &&
-		(TableReferencing(con->relationId) || TableReferenced(con->relationId)))
-	{
-		/*
-		 * Acquire ExclusiveLock as UndistributeTable does in order to
-		 * make sure that no modifications happen on the relations.
-		 */
-		CascadeOperationForFkeyConnectedRelations(con->relationId, ExclusiveLock,
-												  CASCADE_FKEY_UNDISTRIBUTE_TABLE);
-
-		/*
-		 * Undistributed every foreign key connected relation in our foreign key
-		 * subgraph including itself, so return here.
-		 */
-		SetLocalEnableLocalReferenceForeignKeys(oldEnableLocalReferenceForeignKeys);
-		InTableTypeConversionFunctionCall = false;
-		return NULL;
-	}
 	char *newAccessMethod = con->accessMethod ? con->accessMethod :
 							con->originalAccessMethod;
 	IncludeSequenceDefaults includeSequenceDefaults = NEXTVAL_SEQUENCE_DEFAULTS;
@@ -592,28 +324,6 @@ ConvertTable(TableConversionState *con)
 					GetViewCreationTableDDLCommandsOfTable(con->relationId));
 
 	List *foreignKeyCommands = NIL;
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		foreignKeyCommands = GetForeignConstraintToReferenceTablesCommands(
-			con->relationId);
-		if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES ||
-			con->cascadeToColocated == CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED)
-		{
-			List *foreignKeyToDistributedTableCommands =
-				GetForeignConstraintToDistributedTablesCommands(con->relationId);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 foreignKeyToDistributedTableCommands);
-
-			List *foreignKeyFromDistributedTableCommands =
-				GetForeignConstraintFromDistributedTablesCommands(con->relationId);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 foreignKeyFromDistributedTableCommands);
-		}
-		else
-		{
-			WarningsForDroppingForeignKeysWithDistributedTables(con->relationId);
-		}
-	}
 
 	bool isPartitionTable = false;
 	char *attachToParentCommand = NULL;
@@ -746,41 +456,6 @@ ConvertTable(TableConversionState *con)
 
 	con->newRelationId = get_relname_relid(con->tempName, con->schemaId);
 
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		CreateDistributedTableLike(con);
-	}
-	else if (con->conversionType == ALTER_TABLE_SET_ACCESS_METHOD)
-	{
-		CreateCitusTableLike(con);
-	}
-
-	/* preserve colocation with procedures/functions */
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		/*
-		 * Updating the colocationId of functions is always desirable for
-		 * the following scenario:
-		 *    we have shardCount or colocateWith change
-		 *    AND  entire co-location group is altered
-		 * The reason for the second condition is because we currently don't
-		 * remember the original table specified in the colocateWith when
-		 * distributing the function. We only remember the colocationId in
-		 * pg_dist_object table.
-		 */
-		if ((!con->shardCountIsNull || con->colocateWith != NULL) &&
-			(con->cascadeToColocated == CASCADE_TO_COLOCATED_YES || list_length(
-				 con->colocatedTableList) == 1) && con->distributionColumn == NULL)
-		{
-			/*
-			 * Update the colocationId from the one of the old relation to the one
-			 * of the new relation for all tuples in citus.pg_dist_object
-			 */
-			UpdateDistributedObjectColocationId(TableColocationId(con->relationId),
-												TableColocationId(con->newRelationId));
-		}
-	}
-
 	ReplaceTable(con->relationId, con->newRelationId, justBeforeDropCommands,
 				 con->suppressNoticeMessages);
 
@@ -807,58 +482,11 @@ ConvertTable(TableConversionState *con)
 		ExecuteQueryViaSPI(attachToParentCommand, SPI_OK_UTILITY);
 	}
 
-	if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES)
-	{
-		Oid colocatedTableId = InvalidOid;
-
-		/* For now we only support cascade to colocation for alter_distributed_table UDF */
-		Assert(con->conversionType == ALTER_DISTRIBUTED_TABLE);
-		foreach_oid(colocatedTableId, con->colocatedTableList)
-		{
-			if (colocatedTableId == con->relationId)
-			{
-				continue;
-			}
-			char *qualifiedRelationName = quote_qualified_identifier(con->schemaName,
-																	 con->relationName);
-
-			TableConversionParameters cascadeParam = {
-				.relationId = colocatedTableId,
-				.shardCountIsNull = con->shardCountIsNull,
-				.shardCount = con->shardCount,
-				.colocateWith = qualifiedRelationName,
-				.cascadeToColocated = CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED,
-				.suppressNoticeMessages = con->suppressNoticeMessages
-			};
-			TableConversionReturn *colocatedReturn = con->function(&cascadeParam);
-			foreignKeyCommands = list_concat(foreignKeyCommands,
-											 colocatedReturn->foreignKeyCommands);
-		}
-	}
-
 	/* recreate foreign keys */
 	TableConversionReturn *ret = NULL;
-	if (con->conversionType == ALTER_DISTRIBUTED_TABLE)
-	{
-		if (con->cascadeToColocated != CASCADE_TO_COLOCATED_NO_ALREADY_CASCADED)
-		{
-			char *foreignKeyCommand = NULL;
-			foreach_ptr(foreignKeyCommand, foreignKeyCommands)
-			{
-				ExecuteQueryViaSPI(foreignKeyCommand, SPI_OK_UTILITY);
-			}
-		}
-		else
-		{
-			ret = palloc0(sizeof(TableConversionReturn));
-			ret->foreignKeyCommands = foreignKeyCommands;
-		}
-	}
 
 	/* increment command counter so that next command can see the new table */
 	CommandCounterIncrement();
-
-	SetLocalEnableLocalReferenceForeignKeys(oldEnableLocalReferenceForeignKeys);
 
 	InTableTypeConversionFunctionCall = false;
 	return ret;
@@ -1178,116 +806,6 @@ CreateTableConversion(TableConversionParameters *params)
 	}
 
 	return con;
-}
-
-
-/*
- * CreateDistributedTableLike distributes the new table in con parameter
- * like the old one. It checks the distribution column, colocation and
- * shard count and if they are not changed sets them to the old table's values.
- */
-void
-CreateDistributedTableLike(TableConversionState *con)
-{
-	Var *newDistributionKey =
-		con->distributionColumn ? con->distributionKey : con->originalDistributionKey;
-
-	char *newColocateWith = con->colocateWith;
-	if (con->colocateWith == NULL)
-	{
-		/*
-		 * If the new distribution column and the old one have the same data type
-		 * and the shard_count parameter is null (which means shard count will not
-		 * change) we can create the new table in the same colocation as the old one.
-		 * In this case we set the new table's colocate_with value as the old table
-		 * so we don't even change the colocation id of the table during conversion.
-		 */
-		if (con->originalDistributionKey->vartype == newDistributionKey->vartype &&
-			con->shardCountIsNull)
-		{
-			newColocateWith =
-				quote_qualified_identifier(con->schemaName, con->relationName);
-		}
-		else
-		{
-			newColocateWith = "default";
-		}
-	}
-	int newShardCount = 0;
-	if (con->shardCountIsNull)
-	{
-		newShardCount = con->originalShardCount;
-	}
-	else
-	{
-		newShardCount = con->shardCount;
-	}
-
-	/*
-	 * To get the correct column name, we use the original relation id, not the
-	 * new relation id. The reason is that the cached attributes of the original
-	 * and newly created tables are not the same if the original table has
-	 * dropped columns (dropped columns are still present in the attribute cache)
-	 * Detailed example in https://github.com/citusdata/citus/pull/6387
-	 */
-	char *distributionColumnName =
-		ColumnToColumnName(con->relationId, (Node *) newDistributionKey);
-
-	Oid originalRelationId = con->relationId;
-	if (con->originalDistributionKey != NULL && PartitionTable(originalRelationId))
-	{
-		/*
-		 * Due to dropped columns, the partition tables might have different
-		 * distribution keys than their parents, see issue #5123 for details.
-		 *
-		 * At this point, we get the partitioning information from the
-		 * originalRelationId, but we get the distribution key for newRelationId.
-		 *
-		 * We have to do this, because the newRelationId is just a placeholder
-		 * at this moment, but that's going to be the table in pg_dist_partition.
-		 */
-		Oid parentRelationId = PartitionParentOid(originalRelationId);
-		Var *parentDistKey = DistPartitionKeyOrError(parentRelationId);
-		distributionColumnName =
-			ColumnToColumnName(parentRelationId, (Node *) parentDistKey);
-	}
-
-	char partitionMethod = PartitionMethod(con->relationId);
-
-	CreateDistributedTable(con->newRelationId, distributionColumnName, partitionMethod,
-						   newShardCount, true, newColocateWith, false);
-}
-
-
-/*
- * CreateCitusTableLike converts the new table to the Citus table type
- * of the old table.
- */
-void
-CreateCitusTableLike(TableConversionState *con)
-{
-	if (IsCitusTableType(con->relationId, DISTRIBUTED_TABLE))
-	{
-		CreateDistributedTableLike(con);
-	}
-	else if (IsCitusTableType(con->relationId, REFERENCE_TABLE))
-	{
-		CreateDistributedTable(con->newRelationId, NULL, DISTRIBUTE_BY_NONE, 0, false,
-							   NULL, false);
-	}
-	else if (IsCitusTableType(con->relationId, CITUS_LOCAL_TABLE))
-	{
-		CitusTableCacheEntry *entry = GetCitusTableCacheEntry(con->relationId);
-		bool autoConverted = entry->autoConverted;
-		bool cascade = false;
-		CreateCitusLocalTable(con->newRelationId, cascade, autoConverted);
-
-		/*
-		 * creating Citus local table adds a shell table on top
-		 * so we need its oid now
-		 */
-		con->newRelationId = get_relname_relid(con->tempName, con->schemaId);
-	}
 }
 
 
@@ -1708,226 +1226,6 @@ GetNonGeneratedStoredColumnNameList(Oid relationId)
 
 
 /*
- * CheckAlterDistributedTableConversionParameters errors for the cases where
- * alter_distributed_table UDF wouldn't work.
- */
-void
-CheckAlterDistributedTableConversionParameters(TableConversionState *con)
-{
-	/* Changing nothing is not allowed */
-	if (con->distributionColumn == NULL && con->shardCountIsNull &&
-		con->colocateWith == NULL && con->cascadeToColocated != CASCADE_TO_COLOCATED_YES)
-	{
-		ereport(ERROR, (errmsg("you have to specify at least one of the "
-							   "distribution_column, shard_count or "
-							   "colocate_with parameters")));
-	}
-
-	/* check if the parameters in this conversion are given and same with table's properties */
-	bool sameDistColumn = false;
-	if (con->distributionColumn != NULL &&
-		equal(con->distributionKey, con->originalDistributionKey))
-	{
-		sameDistColumn = true;
-	}
-
-	bool sameShardCount = false;
-	if (!con->shardCountIsNull && con->originalShardCount == con->shardCount)
-	{
-		sameShardCount = true;
-	}
-
-	bool sameColocateWith = false;
-	if (con->colocateWith != NULL && strcmp(con->colocateWith, "default") != 0 &&
-		strcmp(con->colocateWith, "none") != 0)
-	{
-		/* check if already colocated with colocate_with */
-		Oid colocatedTableOid = InvalidOid;
-		text *colocateWithText = cstring_to_text(con->colocateWith);
-		Oid colocateWithTableOid = ResolveRelationId(colocateWithText, false);
-		foreach_oid(colocatedTableOid, con->colocatedTableList)
-		{
-			if (colocateWithTableOid == colocatedTableOid)
-			{
-				sameColocateWith = true;
-				break;
-			}
-		}
-
-		/*
-		 * already found colocateWithTableOid so let's check if
-		 * colocate_with table is a distributed table
-		 */
-		if (!IsCitusTableType(colocateWithTableOid, DISTRIBUTED_TABLE))
-		{
-			ereport(ERROR, (errmsg("cannot colocate with %s because "
-								   "it is not a distributed table",
-								   con->colocateWith)));
-		}
-	}
-
-	/* shard_count:=0 is not allowed */
-	if (!con->shardCountIsNull && con->shardCount == 0)
-	{
-		ereport(ERROR, (errmsg("shard_count cannot be 0"),
-						errhint("if you no longer want this to be a "
-								"distributed table you can try "
-								"undistribute_table() function")));
-	}
-
-	if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES &&
-		con->distributionColumn != NULL)
-	{
-		ereport(ERROR, (errmsg("distribution_column cannot be "
-							   "cascaded to colocated tables")));
-	}
-	if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES && con->shardCountIsNull &&
-		con->colocateWith == NULL)
-	{
-		ereport(ERROR, (errmsg("shard_count or colocate_with is necessary "
-							   "for cascading to colocated tables")));
-	}
-
-	/*
-	 * if every parameter is either not given or already the
-	 * same then give error
-	 */
-	if ((con->distributionColumn == NULL || sameDistColumn) &&
-		(con->shardCountIsNull || sameShardCount) &&
-		(con->colocateWith == NULL || sameColocateWith))
-	{
-		ereport(ERROR, (errmsg("this call doesn't change any properties of the table"),
-						errhint("check citus_tables view to see current "
-								"properties of the table")));
-	}
-	if (con->cascadeToColocated == CASCADE_TO_COLOCATED_YES &&
-		con->colocateWith != NULL &&
-		strcmp(con->colocateWith, "none") == 0)
-	{
-		ereport(ERROR, (errmsg("colocate_with := 'none' cannot be "
-							   "cascaded to colocated tables")));
-	}
-
-	int colocatedTableCount = list_length(con->colocatedTableList) - 1;
-	if (colocatedTableCount > 0 && !con->shardCountIsNull && !sameShardCount &&
-		con->cascadeToColocated == CASCADE_TO_COLOCATED_UNSPECIFIED)
-	{
-		ereport(ERROR, (errmsg("cascade_to_colocated parameter is necessary"),
-						errdetail("this table is colocated with some other tables"),
-						errhint("cascade_to_colocated := false will break the "
-								"current colocation, cascade_to_colocated := true "
-								"will change the shard count of colocated tables "
-								"too.")));
-	}
-
-	if (con->colocateWith != NULL && strcmp(con->colocateWith, "default") != 0 &&
-		strcmp(con->colocateWith, "none") != 0)
-	{
-		text *colocateWithText = cstring_to_text(con->colocateWith);
-		Oid colocateWithTableOid = ResolveRelationId(colocateWithText, false);
-		CitusTableCacheEntry *colocateWithTableCacheEntry =
-			GetCitusTableCacheEntry(colocateWithTableOid);
-		int colocateWithTableShardCount =
-			colocateWithTableCacheEntry->shardIntervalArrayLength;
-
-		if (!con->shardCountIsNull && con->shardCount != colocateWithTableShardCount)
-		{
-			ereport(ERROR, (errmsg("shard_count cannot be different than the shard "
-								   "count of the table in colocate_with"),
-							errhint("if no shard_count is specified shard count "
-									"will be same with colocate_with table's")));
-		}
-
-		if (colocateWithTableShardCount != con->originalShardCount)
-		{
-			/*
-			 * shardCount is either 0 or already same with colocateWith table's
-			 * It's ok to set shardCountIsNull to false because we assume giving a table
-			 * to colocate with and no shard count is the same with giving colocate_with
-			 * table's shard count if it is different than the original.
-			 * So it is almost like the shard_count parameter was given by the user.
-			 */
-			con->shardCount = colocateWithTableShardCount;
-			con->shardCountIsNull = false;
-		}
-
-		Var *colocateWithPartKey = DistPartitionKey(colocateWithTableOid);
-
-		if (colocateWithPartKey == NULL)
-		{
-			/* this should never happen */
-			ereport(ERROR, (errmsg("cannot colocate %s with %s because %s doesn't have a "
-								   "distribution column",
-								   con->relationName, con->colocateWith,
-								   con->colocateWith)));
-		}
-		else if (con->distributionColumn &&
-				 colocateWithPartKey->vartype != con->distributionKey->vartype)
-		{
-			ereport(ERROR, (errmsg("cannot colocate with %s and change distribution "
-								   "column to %s because data type of column %s is "
-								   "different then the distribution column of the %s",
-								   con->colocateWith, con->distributionColumn,
-								   con->distributionColumn, con->colocateWith)));
-		}
-		else if (!con->distributionColumn &&
-				 colocateWithPartKey->vartype != con->originalDistributionKey->vartype)
-		{
-			ereport(ERROR, (errmsg("cannot colocate with %s because data type of its "
-								   "distribution column is different than %s",
-								   con->colocateWith, con->relationName)));
-		}
-	}
-
-	if (!con->suppressNoticeMessages)
-	{
-		/* Notices for no operation UDF calls */
-		if (sameDistColumn)
-		{
-			ereport(NOTICE, (errmsg("table is already distributed by %s",
-									con->distributionColumn)));
-		}
-
-		if (sameShardCount)
-		{
-			ereport(NOTICE, (errmsg("shard count of the table is already %d",
-									con->shardCount)));
-		}
-
-		if (sameColocateWith)
-		{
-			ereport(NOTICE, (errmsg("table is already colocated with %s",
-									con->colocateWith)));
-		}
-	}
-}
-
-
-/*
- * CreateWorkerChangeSequenceDependencyCommand creates and returns a
- * worker_change_sequence_dependency query with the parameters.
- */
-static char *
-CreateWorkerChangeSequenceDependencyCommand(char *sequenceSchemaName, char *sequenceName,
-											char *sourceSchemaName, char *sourceName,
-											char *targetSchemaName, char *targetName)
-{
-	char *qualifiedSchemaName = quote_qualified_identifier(sequenceSchemaName,
-														   sequenceName);
-	char *qualifiedSourceName = quote_qualified_identifier(sourceSchemaName, sourceName);
-	char *qualifiedTargetName = quote_qualified_identifier(targetSchemaName, targetName);
-
-	StringInfo query = makeStringInfo();
-	appendStringInfo(query, "SELECT worker_change_sequence_dependency(%s, %s, %s)",
-					 quote_literal_cstr(qualifiedSchemaName),
-					 quote_literal_cstr(qualifiedSourceName),
-					 quote_literal_cstr(qualifiedTargetName));
-
-	return query->data;
-}
-
-
-/*
  * GetAccessMethodForMatViewIfExists returns if there's an access method
  * set to the view with the given oid. Returns NULL otherwise.
  */
@@ -1984,30 +1282,6 @@ WillRecreateForeignKeyToReferenceTable(Oid relationId,
 
 
 /*
- * WarningsForDroppingForeignKeysWithDistributedTables gives warnings for the
- * foreign keys that will be dropped because formerly colocated distributed tables
- * are not colocated.
- */
-void
-WarningsForDroppingForeignKeysWithDistributedTables(Oid relationId)
-{
-	int flags = INCLUDE_REFERENCING_CONSTRAINTS | INCLUDE_DISTRIBUTED_TABLES;
-	List *referencingForeingKeys = GetForeignKeyOids(relationId, flags);
-	flags = INCLUDE_REFERENCED_CONSTRAINTS | INCLUDE_DISTRIBUTED_TABLES;
-	List *referencedForeignKeys = GetForeignKeyOids(relationId, flags);
-
-	List *foreignKeys = list_concat(referencingForeingKeys, referencedForeignKeys);
-
-	Oid foreignKeyOid = InvalidOid;
-	foreach_oid(foreignKeyOid, foreignKeys)
-	{
-		ereport(WARNING, (errmsg("foreign key %s will be dropped",
-								 get_constraint_name(foreignKeyOid))));
-	}
-}
-
-
-/*
  * ExecuteQueryViaSPI connects to SPI, executes the query and checks if it
  * returned the OK value and finishes the SPI connection
  */
@@ -2044,133 +1318,4 @@ ExecuteAndLogQueryViaSPI(char *query, int SPIOK, int logLevel)
 	ereport(logLevel, (errmsg("executing \"%s\"", query)));
 
 	ExecuteQueryViaSPI(query, SPIOK);
-}
-
-
-/*
- * SwitchToSequentialAndLocalExecutionIfRelationNameTooLong generates the longest shard name
- * on the shards of a distributed table, and if exceeds the limit switches to sequential and
- * local execution to prevent self-deadlocks.
- *
- * In case of a RENAME, the relation name parameter should store the new table name, so
- * that the function can generate shard names of the renamed relations
- */
-void
-SwitchToSequentialAndLocalExecutionIfRelationNameTooLong(Oid relationId,
-														 char *finalRelationName)
-{
-	if (!IsCitusTable(relationId))
-	{
-		return;
-	}
-
-	if (ShardIntervalCount(relationId) == 0)
-	{
-		/*
-		 * Relation has no shards, so we cannot run into "long shard relation
-		 * name" issue.
-		 */
-		return;
-	}
-
-	char *longestShardName = GetLongestShardName(relationId, finalRelationName);
-	bool switchedToSequentialAndLocalExecution =
-		SwitchToSequentialAndLocalExecutionIfShardNameTooLong(finalRelationName,
-															  longestShardName);
-
-	if (switchedToSequentialAndLocalExecution)
-	{
-		return;
-	}
-
-	if (PartitionedTable(relationId))
-	{
-		Oid longestNamePartitionId = PartitionWithLongestNameRelationId(relationId);
-		if (!OidIsValid(longestNamePartitionId))
-		{
-			/* no partitions have been created yet */
-			return;
-		}
-
-		char *longestPartitionName = get_rel_name(longestNamePartitionId);
-		char *longestPartitionShardName = NULL;
-
-		/*
-		 * Use the shardId values of the partition if it is distributed, otherwise use
-		 * hypothetical values
-		 */
-		if (IsCitusTable(longestNamePartitionId) &&
-			ShardIntervalCount(longestNamePartitionId) > 0)
-		{
-			longestPartitionShardName =
-				GetLongestShardName(longestNamePartitionId, longestPartitionName);
-		}
-		else
-		{
-			longestPartitionShardName =
-				GetLongestShardNameForLocalPartition(relationId, longestPartitionName);
-		}
-
-		SwitchToSequentialAndLocalExecutionIfShardNameTooLong(longestPartitionName,
-															  longestPartitionShardName);
-	}
-}
-
-
-/*
- * SwitchToSequentialAndLocalExecutionIfShardNameTooLong switches to sequential and local
- * execution if the shard name is too long.
- *
- * returns true if switched to sequential and local execution.
- */
-static bool
-SwitchToSequentialAndLocalExecutionIfShardNameTooLong(char *relationName,
-													  char *longestShardName)
-{
-	if (strlen(longestShardName) >= NAMEDATALEN - 1)
-	{
-		if (ParallelQueryExecutedInTransaction())
-		{
-			/*
-			 * If there has already been a parallel query executed, the sequential mode
-			 * would still use the already opened parallel connections to the workers,
-			 * thus contradicting our purpose of using sequential mode.
-			 */
-			ereport(ERROR, (errmsg(
-								"Shard name (%s) for table (%s) is too long and could "
-								"lead to deadlocks when executed in a transaction "
-								"block after a parallel query", longestShardName,
-								relationName),
-							errhint("Try re-running the transaction with "
-									"\"SET LOCAL citus.multi_shard_modify_mode TO "
-									"\'sequential\';\"")));
-		}
-		else
-		{
-			elog(DEBUG1, "the name of the shard (%s) for relation (%s) is too long, "
-						 "switching to sequential and local execution mode to prevent "
-						 "self deadlocks",
-				 longestShardName, relationName);
-
-			SetLocalMultiShardModifyModeToSequential();
-			SetLocalExecutionStatus(LOCAL_EXECUTION_REQUIRED);
-
-			return true;
-		}
-	}
-
-	return false;
-}
-
-
-/*
- * SwitchToSequentialAndLocalExecutionIfPartitionNameTooLong is a wrapper for new
- * partitions that will be distributed after attaching to a distributed partitioned table
- */
-void
-SwitchToSequentialAndLocalExecutionIfPartitionNameTooLong(Oid parentRelationId,
-														  Oid partitionRelationId)
-{
-	SwitchToSequentialAndLocalExecutionIfRelationNameTooLong(
-		parentRelationId, get_rel_name(partitionRelationId));
 }
