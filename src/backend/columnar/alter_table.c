@@ -90,11 +90,6 @@ typedef struct TableConversionParameters
 	char *colocateWith;
 	char *accessMethod;
 
-	/*
-	 * cascadeToColocated determines whether the shardCount and
-	 * colocateWith will be cascaded to the currently colocated tables
-	 */
-	CascadeToColocatedOption cascadeToColocated;
 
 	/*
 	 * cascadeViaForeignKeys determines if the conversion operation
